@@ -15,7 +15,7 @@ opt.list = true
 opt.listchars = { tab = "  ", trail = ".", nbsp = "+" }
 opt.mouse = "a"
 opt.number = true
-opt.relativenumber = true
+opt.relativenumber = false
 opt.scrolloff = 8
 opt.shiftround = true
 opt.shiftwidth = 2
