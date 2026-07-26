@@ -12,6 +12,9 @@ TOML, Markdown, SQL and XML.
 Neovim **0.11+** is required (`vim.lsp.config`, `vim.lsp.foldexpr`, `vim.hl.on_yank`);
 developed against 0.12.
 
+`./install.sh` installs all of this for you — see [Install](#install). The table below is
+what it sets up, and what to install by hand on an unsupported platform.
+
 ### Required
 
 | Tool | Used for | macOS | Debian / Ubuntu |
@@ -36,6 +39,44 @@ developed against 0.12.
 | `delta` | nicer lazygit diffs (`brew install git-delta`) |
 
 ## Install
+
+### Automatic
+
+`install.sh` handles everything above on macOS, Debian/Ubuntu and Fedora/RHEL:
+
+```sh
+git clone https://github.com/numycode/nvim-config.git ~/.config/nvim
+cd ~/.config/nvim
+./install.sh
+```
+
+It is safe to re-run — every step checks before acting.
+
+| Flag | Effect |
+| --- | --- |
+| `--check` | Report what is missing, change nothing |
+| `--dry-run` | Print the commands instead of running them |
+| `-y`, `--yes` | Do not prompt |
+| `--skip-font` | Do not install the Nerd Font |
+| `--skip-optional` | Do not install `gh` and `delta` |
+| `--no-sync` | Do not run the headless plugin/LSP install |
+
+Three tools come from upstream rather than the system package manager, because the packaged
+versions are too old or missing:
+
+- **Neovim** — only when the packaged build is older than 0.11. Debian stable ships 0.10.4,
+  which this config cannot run on. Installed to `/opt/nvim` with a symlink in `/usr/local/bin`.
+- **lazygit** — absent from Debian bookworm. Installed to `~/.local/bin`.
+- **uv** — via the official Astral installer.
+
+On Debian the `fd` binary is installed as `fdfind`; the script symlinks it to `~/.local/bin/fd`
+because the snacks picker looks for `fd`.
+
+The final step runs `:Lazy restore`, which installs the exact commits pinned in
+`lazy-lock.json` rather than updating to latest. Run `:Lazy update` yourself when you
+actually want newer plugins.
+
+### Manual
 
 ```sh
 git clone https://github.com/numycode/nvim-config.git ~/.config/nvim
@@ -66,6 +107,7 @@ with `:Lazy` and `:Mason`, then `:checkhealth`.
 ## Layout
 
 ```
+install.sh                cross-platform installer (macOS / Debian / Fedora)
 init.lua                  leader keys, config.* requires, lazy.nvim bootstrap
 lua/config/
   options.lua             vim.opt, folding, diagnostics presentation
