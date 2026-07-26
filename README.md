@@ -40,9 +40,38 @@ what it sets up, and what to install by hand on an unsupported platform.
 
 ## Install
 
-### Automatic
+### One command
 
-`install.sh` handles everything above on macOS, Debian/Ubuntu and Fedora/RHEL:
+Nothing needs to be installed first — not even git. The script clones the config to
+`~/.config/nvim` for you, installs every dependency, and sets up plugins and language servers:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/numycode/nvim-config/main/install.sh | bash
+```
+
+Then run `nvim`. To pass flags through the pipe, use `bash -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/numycode/nvim-config/main/install.sh | bash -s -- --check
+```
+
+Prefer to read it before running it — always reasonable for a piped installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/numycode/nvim-config/main/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
+Installing a fork or branch:
+
+```sh
+NVIM_CONFIG_REPO=https://github.com/you/fork.git \
+NVIM_CONFIG_BRANCH=my-branch \
+  bash <(curl -fsSL https://raw.githubusercontent.com/numycode/nvim-config/main/install.sh)
+```
+
+### From a clone
 
 ```sh
 git clone https://github.com/numycode/nvim-config.git ~/.config/nvim
@@ -50,7 +79,9 @@ cd ~/.config/nvim
 ./install.sh
 ```
 
-It is safe to re-run — every step checks before acting.
+It is safe to re-run — every step checks before acting. Run from a clone anywhere else and it
+symlinks that directory to `~/.config/nvim`; an existing config is moved aside to
+`~/.config/nvim.bak.<timestamp>` after asking.
 
 | Flag | Effect |
 | --- | --- |
@@ -70,11 +101,13 @@ versions are too old or missing:
 - **uv** — via the official Astral installer.
 
 On Debian the `fd` binary is installed as `fdfind`; the script symlinks it to `~/.local/bin/fd`
-because the snacks picker looks for `fd`.
+because the snacks picker looks for `fd`. If `~/.local/bin` is not on your `PATH`, the script
+adds it for its own run and tells you to persist it in your shell profile.
 
 The final step runs `:Lazy restore`, which installs the exact commits pinned in
-`lazy-lock.json` rather than updating to latest. Run `:Lazy update` yourself when you
-actually want newer plugins.
+`lazy-lock.json` rather than updating to latest, then loads the LSP stack so Mason downloads
+the language servers during setup rather than during your first edit. Run `:Lazy update`
+yourself when you actually want newer plugins.
 
 ### Manual
 

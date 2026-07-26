@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 #
-# Installer for this Neovim configuration.
+# One-command installer for this Neovim configuration.
 #
 # Supports macOS (Homebrew), Debian/Ubuntu (apt) and Fedora/RHEL (dnf).
 # Safe to re-run: every step checks before acting.
 #
+# Remote (clones the config for you):
+#   curl -fsSL https://raw.githubusercontent.com/numycode/nvim-config/main/install.sh | bash
+#   curl -fsSL .../install.sh | bash -s -- --check
+#
+# Local (from a clone):
 #   ./install.sh              install everything
 #   ./install.sh --check      report what is missing, change nothing
 #   ./install.sh --dry-run    print the commands instead of running them
@@ -15,8 +20,22 @@ set -euo pipefail
 readonly NVIM_MIN_MAJOR=0
 readonly NVIM_MIN_MINOR=11
 readonly NERD_FONT="JetBrainsMono"
-REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd)"
-readonly REPO_DIR
+
+# Overridable so a fork or branch can be installed:
+#   NVIM_CONFIG_REPO=https://github.com/you/fork.git curl ... | bash
+readonly REPO_URL="${NVIM_CONFIG_REPO:-https://github.com/numycode/nvim-config.git}"
+readonly REPO_BRANCH="${NVIM_CONFIG_BRANCH:-main}"
+readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
+
+# When piped from curl there is no script file on disk, so BASH_SOURCE points at
+# something like /dev/fd/63. In that case REPO_DIR is empty and we clone.
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]]; then
+  REPO_DIR="$(cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+else
+  REPO_DIR=""
+fi
+BOOTSTRAP=false
 
 DRY_RUN=false
 CHECK_ONLY=false
@@ -66,10 +85,21 @@ have() { command -v "$1" >/dev/null 2>&1; }
 confirm() {
   $ASSUME_YES && return 0
   $DRY_RUN && return 0
+  # Piped from curl, stdin is the script itself, so prompt on the terminal.
+  # With no terminal at all (CI), decline rather than hang.
+  if [[ ! -r /dev/tty ]]; then
+    warn "no terminal available to confirm: $1 (pass --yes to accept)"
+    return 1
+  fi
   local reply
   printf '  %s?%s %s [y/N] ' "$C_YELLOW" "$C_RESET" "$1"
   read -r reply </dev/tty || return 1
   [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+# True when the directory holds this Neovim configuration.
+is_config_repo() {
+  [[ -f "$1/init.lua" && -d "$1/lua/config" && -d "$1/lua/plugins" ]]
 }
 
 usage() {
@@ -202,13 +232,24 @@ ensure_homebrew() {
 
 readonly LOCAL_BIN="$HOME/.local/bin"
 
+LOCAL_BIN_WARNED=false
+
 ensure_local_bin() {
   [[ -d "$LOCAL_BIN" ]] || run mkdir -p "$LOCAL_BIN"
   case ":$PATH:" in
-    *":$LOCAL_BIN:"*) ;;
-    *) warn "$LOCAL_BIN is not on your PATH. Add this to your shell profile:
-      export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+    *":$LOCAL_BIN:"*) return 0 ;;
   esac
+
+  # Put it on PATH for the rest of this run, otherwise anything installed here
+  # (uv, and lazygit where it is not packaged) is invisible to the steps below
+  # and to the final verification.
+  export PATH="$LOCAL_BIN:$PATH"
+
+  $LOCAL_BIN_WARNED && return 0
+  LOCAL_BIN_WARNED=true
+  warn "$LOCAL_BIN was not on your PATH. Added it for this run; to keep it, add
+      export PATH=\"\$HOME/.local/bin:\$PATH\"
+      to your shell profile (~/.bashrc, ~/.zshrc)."
 }
 
 # Download to a path, preferring curl.
@@ -278,7 +319,10 @@ ensure_neovim() {
   else
     MISSING+=("neovim")
   fi
-  $CHECK_ONLY && return 0
+  if $CHECK_ONLY; then
+    [[ -n "${version:-}" ]] || warn "neovim is not installed"
+    return 0
+  fi
 
   case "$DISTRO" in
     macos)
@@ -440,7 +484,7 @@ install_lazygit_from_release() {
 ensure_lazygit() {
   have lazygit && { ok "lazygit"; return 0; }
   MISSING+=("lazygit")
-  $CHECK_ONLY && return 0
+  $CHECK_ONLY && { warn "lazygit is not installed"; return 0; }
 
   # Absent from Debian bookworm, so fall back to the upstream release.
   if pkg_available lazygit; then
@@ -454,7 +498,7 @@ ensure_lazygit() {
 ensure_uv() {
   have uv && { ok "uv"; return 0; }
   MISSING+=("uv")
-  $CHECK_ONLY && return 0
+  $CHECK_ONLY && { warn "uv is not installed"; return 0; }
 
   if [[ "$PKG" == "brew" ]]; then
     pkg_install uv
@@ -463,9 +507,12 @@ ensure_uv() {
     if $DRY_RUN; then
       printf '  %s$ curl -LsSf https://astral.sh/uv/install.sh | sh%s\n' "$C_DIM" "$C_RESET"
     else
-      curl -LsSf https://astral.sh/uv/install.sh | sh
+      # The installer drops uv into ~/.local/bin, which this shell may not have
+      # on PATH yet.
+      curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+      ensure_local_bin
+      have uv || warn "uv installed but not found on PATH; check $LOCAL_BIN"
     fi
-    ensure_local_bin
   fi
   INSTALLED+=("uv")
 }
@@ -545,7 +592,7 @@ ensure_optional() {
   if have gh; then
     ok "gh"
   else
-    $CHECK_ONLY && MISSING+=("gh (optional)")
+    $CHECK_ONLY && { MISSING+=("gh (optional)"); warn "gh is not installed (optional)"; }
     if ! $CHECK_ONLY; then
       if pkg_available gh; then
         pkg_install gh && INSTALLED+=("gh")
@@ -559,7 +606,7 @@ ensure_optional() {
   if have delta; then
     ok "delta"
   else
-    $CHECK_ONLY && MISSING+=("delta (optional)")
+    $CHECK_ONLY && { MISSING+=("delta (optional)"); warn "delta is not installed (optional)"; }
     if ! $CHECK_ONLY; then
       local delta_pkg="git-delta"
       [[ "$DISTRO" == "fedora" ]] && delta_pkg="git-delta"
@@ -574,36 +621,86 @@ ensure_optional() {
 
 # -------------------------------------------------------------- config ----
 
-ensure_config_location() {
-  local target="${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
+# Minimal git, needed before the repo can be cloned. The full package pass
+# later is a no-op for anything installed here.
+ensure_git_for_bootstrap() {
+  have git && return 0
+  info "Installing git so the configuration can be cloned"
+  case "$PKG" in
+    brew) run brew install git ;;
+    apt)  run $SUDO apt-get update -qq && run $SUDO apt-get install -y git ;;
+    dnf)  run $SUDO dnf install -y git ;;
+  esac
+  have git || $DRY_RUN || die "Could not install git."
+}
 
-  # Already running from the config directory: nothing to do.
-  if [[ "$REPO_DIR" == "$target" ]]; then
-    ok "config in place at $target"
+# Put the configuration at CONFIG_DIR, cloning it when we were piped from curl.
+bootstrap_repo() {
+  if is_config_repo "$CONFIG_DIR"; then
+    REPO_DIR="$CONFIG_DIR"
+    ok "config already present at $CONFIG_DIR"
+    if [[ -d "$CONFIG_DIR/.git" ]] && ! $CHECK_ONLY; then
+      info "Updating to the latest $REPO_BRANCH"
+      run git -C "$CONFIG_DIR" pull --ff-only origin "$REPO_BRANCH" >/dev/null 2>&1 ||
+        warn "Could not fast-forward $CONFIG_DIR; leaving your local state alone."
+    fi
     return 0
   fi
-  if [[ -L "$target" && "$(readlink "$target")" == "$REPO_DIR" ]]; then
-    ok "config symlinked: $target -> $REPO_DIR"
+
+  if $CHECK_ONLY; then
+    warn "no configuration at $CONFIG_DIR; a full run would clone $REPO_URL"
+    REPO_DIR="$CONFIG_DIR"
     return 0
   fi
 
-  $CHECK_ONLY && { warn "config lives at $REPO_DIR, not $target"; return 0; }
+  ensure_git_for_bootstrap
 
-  if [[ -e "$target" ]]; then
+  # Something else already lives there.
+  if [[ -e "$CONFIG_DIR" ]]; then
     local backup
-    backup="${target}.bak.$(date +%Y%m%d%H%M%S)"
-    warn "$target already exists and is not this repository."
-    confirm "Move it to $backup and link this repo there?" || {
-      warn "Left $target alone. Neovim will not use this configuration."
-      return 0
-    }
-    run mv "$target" "$backup"
+    backup="${CONFIG_DIR}.bak.$(date +%Y%m%d%H%M%S)"
+    warn "$CONFIG_DIR exists but is not this configuration."
+    confirm "Move it to $backup and clone there?" ||
+      die "Refusing to overwrite $CONFIG_DIR. Move it aside, or re-run with --yes."
+    run mv "$CONFIG_DIR" "$backup"
     INSTALLED+=("backed up previous config to $backup")
   fi
 
-  run mkdir -p "$(dirname "$target")"
-  run ln -s "$REPO_DIR" "$target"
-  ok "linked $target -> $REPO_DIR"
+  info "Cloning $REPO_URL into $CONFIG_DIR"
+  run mkdir -p "$(dirname "$CONFIG_DIR")"
+  run git clone --branch "$REPO_BRANCH" --depth 1 "$REPO_URL" "$CONFIG_DIR"
+  REPO_DIR="$CONFIG_DIR"
+  INSTALLED+=("cloned configuration to $CONFIG_DIR")
+}
+
+# Local runs: the repo may live anywhere, so point CONFIG_DIR at it.
+ensure_config_location() {
+  if [[ "$REPO_DIR" == "$CONFIG_DIR" ]]; then
+    ok "config in place at $CONFIG_DIR"
+    return 0
+  fi
+  if [[ -L "$CONFIG_DIR" && "$(readlink "$CONFIG_DIR")" == "$REPO_DIR" ]]; then
+    ok "config symlinked: $CONFIG_DIR -> $REPO_DIR"
+    return 0
+  fi
+
+  $CHECK_ONLY && { warn "config lives at $REPO_DIR, not $CONFIG_DIR"; return 0; }
+
+  if [[ -e "$CONFIG_DIR" ]]; then
+    local backup
+    backup="${CONFIG_DIR}.bak.$(date +%Y%m%d%H%M%S)"
+    warn "$CONFIG_DIR already exists and is not this repository."
+    confirm "Move it to $backup and link this repo there?" || {
+      warn "Left $CONFIG_DIR alone. Neovim will not use this configuration."
+      return 0
+    }
+    run mv "$CONFIG_DIR" "$backup"
+    INSTALLED+=("backed up previous config to $backup")
+  fi
+
+  run mkdir -p "$(dirname "$CONFIG_DIR")"
+  run ln -s "$REPO_DIR" "$CONFIG_DIR"
+  ok "linked $CONFIG_DIR -> $REPO_DIR"
   INSTALLED+=("config symlink")
 }
 
@@ -647,18 +744,43 @@ sync_neovim() {
   fi
 
   nvim --headless "$lazy_cmd" +qa 2>&1 | grep -viE '^\s*$' || true
-  # Language servers install asynchronously; give them a bounded window.
+  ok "plugins installed"
+
+  # The LSP stack is lazy-loaded on BufReadPre so the dashboard stays fast,
+  # which means a headless run with no file never loads it and Mason installs
+  # nothing. Load it explicitly here, otherwise the first real edit silently
+  # spends minutes downloading language servers.
+  info "Installing language servers and formatters via Mason"
   nvim --headless -c 'lua
+    require("lazy").load({ plugins = { "mason-lspconfig.nvim", "mason-tool-installer.nvim" } })
+
     local ok, reg = pcall(require, "mason-registry")
-    if not ok then vim.cmd("qa") return end
-    vim.wait(600000, function()
+    if not ok then vim.cmd("qa!") return end
+
+    -- Wait until nothing has been installing for a short settle period, so we
+    -- do not exit during the gap between two queued downloads.
+    local settle_ms, timeout_ms = 20000, 900000
+    local idle_since = nil
+    vim.wait(timeout_ms, function()
+      local busy = false
       for _, p in ipairs(reg.get_all_packages()) do
-        if p:is_installing() then return false end
+        if p:is_installing() then busy = true break end
       end
-      return true
-    end, 2000)
-  ' +qa >/dev/null 2>&1 || true
-  ok "plugins and servers synced"
+      if busy then
+        idle_since = nil
+        return false
+      end
+      idle_since = idle_since or vim.uv.now()
+      return (vim.uv.now() - idle_since) >= settle_ms
+    end, 1000)
+
+    local names = {}
+    for _, p in ipairs(reg.get_installed_packages()) do names[#names + 1] = p.name end
+    table.sort(names)
+    print("mason installed " .. #names .. ": " .. table.concat(names, ", "))
+  ' +qa 2>&1 | grep -E '^mason installed' || true
+
+  ok "language servers installed"
 }
 
 # -------------------------------------------------------------- verify ----
@@ -743,13 +865,24 @@ main() {
   parse_args "$@"
   detect_platform
 
+  # No script on disk, or one sitting outside a checkout: fetch the config.
+  if [[ -z "$REPO_DIR" ]] || ! is_config_repo "$REPO_DIR"; then
+    BOOTSTRAP=true
+  fi
+
   step "Neovim config installer"
-  printf '  repo:     %s\n' "$REPO_DIR"
+  printf '  source:   %s\n' "$($BOOTSTRAP && echo "$REPO_URL ($REPO_BRANCH)" || echo "$REPO_DIR")"
+  printf '  target:   %s\n' "$CONFIG_DIR"
   printf '  platform: %s / %s / %s\n' "$OS" "$DISTRO" "$ARCH"
   $DRY_RUN   && printf '  %smode:     dry run, nothing will be changed%s\n' "$C_DIM" "$C_RESET"
   $CHECK_ONLY && printf '  %smode:     check only, nothing will be changed%s\n' "$C_DIM" "$C_RESET"
 
   [[ "$OS" == "macos" ]] && ! $CHECK_ONLY && ensure_homebrew
+
+  if $BOOTSTRAP; then
+    step "Configuration"
+    bootstrap_repo
+  fi
 
   step "System packages"
   ensure_base_packages
@@ -767,7 +900,7 @@ main() {
   ensure_nerd_font
 
   step "Configuration"
-  ensure_config_location
+  $BOOTSTRAP || ensure_config_location
   ensure_treesitter_cli
 
   if ! $CHECK_ONLY; then
