@@ -280,8 +280,8 @@ This is the `super-tab` preset, matching JetBrains. Switch to `preset = "default
 
 | | Time |
 | --- | --- |
-| `nvim` (dashboard) | ~96 ms |
-| `nvim file.py` (full LSP path) | ~175 ms |
+| `nvim` (dashboard) | ~85 ms |
+| `nvim file.py` (full LSP path) | ~130 ms |
 
 The LSP chain — mason-lspconfig, blink.cmp, LuaSnip — is deferred to `BufReadPre`, so
 opening the dashboard never pays for it. Profile with `:Lazy profile` or
