@@ -84,11 +84,15 @@ return {
       local nvim_treesitter = require("nvim-treesitter")
       nvim_treesitter.setup()
 
-      -- Fetch any parser that is missing. Asynchronous so startup is not
-      -- blocked; install.sh calls the same function synchronously during setup.
-      local _, _, ts_err = ts.ensure()
-      if ts_err then
-        vim.notify(ts_err, vim.log.levels.WARN)
+      -- Fetch any parser that is missing, asynchronously so startup is not
+      -- blocked. install.sh sets NVIM_PARSERS_MANAGED=1 and drives the same
+      -- function synchronously instead: without the guard both run in the same
+      -- instance and race over the same downloads.
+      if vim.env.NVIM_PARSERS_MANAGED ~= "1" then
+        local _, _, ts_err = ts.ensure()
+        if ts_err then
+          vim.notify(ts_err, vim.log.levels.WARN)
+        end
       end
 
       require("nvim-treesitter-textobjects").setup({

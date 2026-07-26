@@ -761,6 +761,10 @@ sync_neovim() {
   nvim --headless "$lazy_cmd" +qa 2>&1 | grep -viE '^\s*$' || true
   ok "plugins installed"
 
+  # Stop treesitter.lua kicking off its own asynchronous install in this same
+  # instance; the call below drives it synchronously instead.
+  export NVIM_PARSERS_MANAGED=1
+
   info "Installing treesitter parsers"
   nvim --headless -c 'lua
     local ok, res = pcall(function()

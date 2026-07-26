@@ -150,14 +150,23 @@ which never fires without a UI. Verify with a real PTY (`script -q /dev/null nvi
 available on this machine:
 
 ```sh
+# Bootstrap path (clones from GitHub), exactly as `curl ... | bash -s --` behaves:
 container run --rm -i docker.io/library/ubuntu:latest bash -s -- --check < install.sh
-container run --rm -v "$PWD:/mnt" docker.io/library/debian:latest bash /mnt/install.sh --yes --skip-font
+
+# Same, with a copy of just the script mounted so local edits are exercised:
+mkdir -p /tmp/m && cp install.sh /tmp/m/
+container run --rm -v /tmp/m:/mnt docker.io/library/debian:latest \
+  bash /mnt/install.sh --yes --skip-font
 ```
+
+Mount only the script, never the whole repo: `is_config_repo()` would then be true for the
+mount point, and the run would exercise the symlink path instead of the clone path.
 
 Caveats learned:
 
-- The installer **clones the config from GitHub**, so unpushed local changes are not tested.
-  Push first, or the container silently runs an old config.
+- The installer **clones the config from GitHub**, so unpushed local changes to anything other
+  than `install.sh` are not tested. Push first, or the container silently runs an old config
+  against a new script — which looks exactly like a code bug.
 - Container images are large. This machine has run low on disk; check `df -h /` first and
   `container image delete` what you pulled.
 - Apple's runtime is arm64-only, so x86_64 paths remain unexercised.
