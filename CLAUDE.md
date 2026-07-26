@@ -74,6 +74,13 @@ to legacy regex syntax, which looks similar.
 **`get_installed()` returns queries; `get_installed("parsers")` returns parsers.** The bare
 call returns `{"html_tags"}` and means nothing.
 
+**Wait for the right number of LSP clients.** Python attaches two (`basedpyright` and `ruff`)
+and JavaScript one. `ruff` is a Rust binary and attaches almost immediately; `basedpyright` is
+a Node server and takes several seconds longer. A probe that waits for `>= 1` client returns
+while only `ruff` is up and looks exactly like "basedpyright is broken" — that mistake cost a
+full debugging cycle. Wait for `>= 2` on Python, then sleep briefly before sampling inlay hints,
+which need basedpyright.
+
 **pyright is not used — basedpyright is.** pyright does not implement
 `textDocument/inlayHint`; basedpyright is a drop-in fork that does.
 
