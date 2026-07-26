@@ -746,6 +746,17 @@ sync_neovim() {
   nvim --headless "$lazy_cmd" +qa 2>&1 | grep -viE '^\s*$' || true
   ok "plugins installed"
 
+  info "Installing treesitter parsers"
+  nvim --headless -c 'lua
+    local parsers = require("config.parsers").parsers
+    local nts = require("nvim-treesitter")
+    local installed = {}
+    for _, name in ipairs(nts.get_installed("parsers") or {}) do installed[name] = true end
+    local missing = vim.tbl_filter(function(n) return not installed[n] end, parsers)
+    if #missing > 0 then nts.install(missing):wait(900000) end
+    print(("parsers: %d/%d installed"):format(#(nts.get_installed("parsers") or {}), #parsers))
+  ' +qa 2>&1 | grep -E '^parsers:' || true
+
   # The LSP stack is lazy-loaded on BufReadPre so the dashboard stays fast,
   # which means a headless run with no file never loads it and Mason installs
   # nothing. Load it explicitly here, otherwise the first real edit silently
@@ -757,28 +768,67 @@ sync_neovim() {
     local ok, reg = pcall(require, "mason-registry")
     if not ok then vim.cmd("qa!") return end
 
-    -- Wait until nothing has been installing for a short settle period, so we
-    -- do not exit during the gap between two queued downloads.
-    local settle_ms, timeout_ms = 20000, 900000
-    local idle_since = nil
-    vim.wait(timeout_ms, function()
-      local busy = false
-      for _, p in ipairs(reg.get_all_packages()) do
-        if p:is_installing() then busy = true break end
+    -- The registry index is downloaded lazily. Until it lands
+    -- get_all_packages() is empty, nothing can install, and a naive wait exits
+    -- immediately having done nothing.
+    local refreshed = false
+    reg.refresh(function() refreshed = true end)
+    vim.wait(300000, function() return refreshed end, 250)
+
+    -- Install exactly what the config declares, rather than trusting
+    -- ensure_installed to have fired before the registry was ready.
+    local want = {}
+    local ok_ml, ml = pcall(require, "mason-lspconfig")
+    if ok_ml and ml.get_mappings then
+      local to_package = ml.get_mappings().lspconfig_to_package
+      for server in pairs(require("config.servers")) do
+        if to_package[server] then want[to_package[server]] = true end
       end
-      if busy then
+    end
+    for _, tool in ipairs(require("config.tools")) do want[tool] = true end
+
+    for name in pairs(want) do
+      local found, pkg = pcall(reg.get_package, name)
+      if found and not pkg:is_installed() then pcall(function() pkg:install() end) end
+    end
+
+    -- Wait until nothing has been installing for a short settle period, so we
+    -- do not exit during the gap between two queued downloads. This can take
+    -- several minutes, so report progress rather than looking hung.
+    local settle_ms, timeout_ms = 20000, 1200000
+    local idle_since, last_report = nil, 0
+
+    vim.wait(timeout_ms, function()
+      local busy = {}
+      for _, p in ipairs(reg.get_all_packages()) do
+        if p:is_installing() then busy[#busy + 1] = p.name end
+      end
+
+      local now = vim.uv.now()
+      if now - last_report >= 15000 then
+        last_report = now
+        local done = #reg.get_installed_packages()
+        if #busy > 0 then
+          table.sort(busy)
+          print(("  ... %d installed, building: %s"):format(done, table.concat(busy, ", ")))
+        else
+          print(("  ... %d installed"):format(done))
+        end
+      end
+
+      if #busy > 0 then
         idle_since = nil
         return false
       end
-      idle_since = idle_since or vim.uv.now()
-      return (vim.uv.now() - idle_since) >= settle_ms
+      idle_since = idle_since or now
+      return (now - idle_since) >= settle_ms
     end, 1000)
 
     local names = {}
     for _, p in ipairs(reg.get_installed_packages()) do names[#names + 1] = p.name end
     table.sort(names)
     print("mason installed " .. #names .. ": " .. table.concat(names, ", "))
-  ' +qa 2>&1 | grep -E '^mason installed' || true
+  ' +qa 2>&1 | grep -E "^  \.\.\.|^mason installed" || true
 
   ok "language servers installed"
 }

@@ -1,59 +1,55 @@
-local parsers = {
-  "bash",
-  "css",
-  "diff",
-  "dockerfile",
-  "git_config",
-  "git_rebase",
-  "gitcommit",
-  "gitignore",
-  "html",
-  "javascript",
-  "jsdoc",
-  "json",
-  "jsonc",
-  "lua",
-  "luadoc",
-  "markdown",
-  "markdown_inline",
-  "python",
-  "query",
-  "regex",
-  "scss",
-  "sql",
-  "toml",
-  "vim",
-  "vimdoc",
-  "xml",
-  "yaml",
-}
+local ts = require("config.parsers")
+local parsers = ts.parsers
+local filetypes = ts.filetypes
 
-local filetypes = {
-  "css",
-  "diff",
-  "dockerfile",
-  "gitcommit",
-  "gitconfig",
-  "gitignore",
-  "gitrebase",
-  "html",
-  "javascript",
-  "javascriptreact",
-  "json",
-  "jsonc",
-  "lua",
-  "markdown",
-  "python",
-  "query",
-  "scss",
-  "sh",
-  "sql",
-  "toml",
-  "vim",
-  "vimdoc",
-  "xml",
-  "yaml",
-}
+-- Put the vendored tree-sitter CLI on PATH when there is no system one.
+local function ensure_tree_sitter_cli()
+  if vim.fn.executable("tree-sitter") == 1 then
+    return true
+  end
+
+  local config_dir = vim.fs.normalize(vim.fn.stdpath("config"))
+  local local_cli = vim.fs.joinpath(config_dir, "node_modules", "tree-sitter-cli", "tree-sitter")
+
+  if vim.fn.filereadable(local_cli) == 1 then
+    vim.env.PATH = vim.fs.dirname(local_cli) .. ":" .. vim.env.PATH
+  end
+
+  return vim.fn.executable("tree-sitter") == 1
+end
+
+-- Fetch any parser that is not already on disk. This lives here rather than in
+-- lazy.nvim's `build`, which only runs when the plugin itself is installed or
+-- updated: adding a parser to lua/config/parsers.lua would never fetch it.
+-- Runs asynchronously so startup is not blocked; install.sh does the same
+-- synchronously during setup.
+local function install_missing_parsers(nvim_treesitter)
+  local have_cli = ensure_tree_sitter_cli()
+
+  local installed = {}
+  for _, name in ipairs(nvim_treesitter.get_installed("parsers") or {}) do
+    installed[name] = true
+  end
+
+  local missing = vim.tbl_filter(function(name) return not installed[name] end, parsers)
+
+  if #missing == 0 then
+    return
+  end
+
+  if not have_cli then
+    vim.notify(
+      ("tree-sitter CLI not found; %d parsers cannot be installed. Run `npm install` in %s."):format(
+        #missing,
+        vim.fn.stdpath("config")
+      ),
+      vim.log.levels.WARN
+    )
+    return
+  end
+
+  nvim_treesitter.install(missing)
+end
 
 -- Structural motions and text objects, the rough equivalent of JetBrains'
 -- Ctrl+W expand-selection and Alt+Up/Down structural navigation.
@@ -130,26 +126,14 @@ return {
         end,
       },
     },
-    build = function()
-      local config_dir = vim.fs.normalize(vim.fn.stdpath("config"))
-      local local_cli = vim.fs.joinpath(config_dir, "node_modules", "tree-sitter-cli", "tree-sitter")
-
-      if vim.fn.executable("tree-sitter") == 0 and vim.fn.filereadable(local_cli) == 1 then
-        vim.env.PATH = vim.fs.dirname(local_cli) .. ":" .. vim.env.PATH
-      end
-
-      if vim.fn.executable("tree-sitter") == 0 then
-        vim.notify("tree-sitter CLI not found; skipping parser installation", vim.log.levels.WARN)
-        return
-      end
-
-      require("nvim-treesitter").install(parsers):wait(300000)
-    end,
     opts = {
       filetypes = filetypes,
     },
     config = function(_, opts)
-      require("nvim-treesitter").setup()
+      local nvim_treesitter = require("nvim-treesitter")
+      nvim_treesitter.setup()
+
+      install_missing_parsers(nvim_treesitter)
 
       require("nvim-treesitter-textobjects").setup({
         select = {
