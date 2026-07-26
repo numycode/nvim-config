@@ -73,7 +73,6 @@ function M.on_attach(client, bufnr)
   -- Code actions and refactoring
   map({ "n", "v" }, "<leader>ca", vim.lsp.buf.code_action, "Code action", methods.textDocument_codeAction)
   map("n", "<leader>cr", vim.lsp.buf.rename, "Rename symbol", methods.textDocument_rename)
-  map("n", "<leader>rn", vim.lsp.buf.rename, "Rename symbol", methods.textDocument_rename)
   map("n", "<leader>cR", function() require("snacks").rename.rename_file() end, "Rename file")
 
   -- Symbols

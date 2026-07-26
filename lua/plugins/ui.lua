@@ -169,6 +169,8 @@ return {
         { "<leader>f", group = "find" },
         { "<leader>g", group = "git" },
         { "<leader>gh", group = "hunk" },
+        { "<leader>m", group = "multicursor" },
+        { "<leader>r", group = "refactor" },
         { "<leader>s", group = "search" },
         { "<leader>S", group = "session" },
         { "<leader>t", group = "terminal" },

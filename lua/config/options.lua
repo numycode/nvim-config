@@ -59,6 +59,15 @@ opt.foldlevelstart = 99
 
 vim.g.have_nerd_font = true
 
+-- No plugin here uses a remote provider host. Leaving python3 enabled costs
+-- ~160ms on the first Python buffer, because vim-wakatime probes has('python3')
+-- and Neovim answers by spawning an interpreter. wakatime only uses that as a
+-- fallback for bootstrapping wakatime-cli, which it installs over HTTP anyway.
+vim.g.loaded_python3_provider = 0
+vim.g.loaded_perl_provider = 0
+vim.g.loaded_ruby_provider = 0
+vim.g.loaded_node_provider = 0
+
 vim.diagnostic.config({
   severity_sort = true,
   underline = { severity = vim.diagnostic.severity.ERROR },

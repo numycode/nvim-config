@@ -1,6 +1,8 @@
 return {
   {
     "wakatime/vim-wakatime",
-    lazy = false,
+    -- Sourcing this vimscript plugin costs ~19ms; nothing needs it during the
+    -- first frame.
+    event = "VeryLazy",
   },
 }

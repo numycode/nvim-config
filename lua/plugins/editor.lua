@@ -114,6 +114,84 @@ return {
     opts = {},
   },
 
+  -- Multiple cursors (JetBrains Alt+J / Ctrl+Alt+Shift+J).
+  {
+    "jake-stewart/multicursor.nvim",
+    branch = "1.0",
+    event = "VeryLazy",
+    config = function()
+      local mc = require("multicursor-nvim")
+      mc.setup()
+
+      local function map(mode, lhs, rhs, desc) vim.keymap.set(mode, lhs, rhs, { silent = true, desc = desc }) end
+
+      -- Add a cursor on the next/previous match of the word under the cursor.
+      map({ "n", "x" }, "<leader>ma", function() mc.matchAddCursor(1) end, "Add cursor at next match")
+      map({ "n", "x" }, "<leader>mA", function() mc.matchAddCursor(-1) end, "Add cursor at prev match")
+      map({ "n", "x" }, "<leader>ms", function() mc.matchSkipCursor(1) end, "Skip next match")
+      map({ "n", "x" }, "<leader>mm", function() mc.matchAllAddCursors() end, "Cursor on every match")
+
+      -- Add cursors vertically, like a column selection.
+      map({ "n", "x" }, "<C-Down>", function() mc.lineAddCursor(1) end, "Add cursor below")
+      map({ "n", "x" }, "<C-Up>", function() mc.lineAddCursor(-1) end, "Add cursor above")
+
+      -- Split a visual selection into one cursor per line.
+      map("x", "<leader>ml", mc.splitCursors, "Split selection into cursors")
+      map("x", "I", mc.insertVisual, "Insert at start of each line")
+      map("x", "A", mc.appendVisual, "Append at end of each line")
+
+      -- <Esc> clears the extra cursors only while they exist, so it keeps its
+      -- normal nohlsearch behaviour the rest of the time.
+      mc.addKeymapLayer(function(layer)
+        layer({ "n", "x" }, "<left>", mc.prevCursor)
+        layer({ "n", "x" }, "<right>", mc.nextCursor)
+        layer("n", "<esc>", function()
+          if not mc.cursorsEnabled() then
+            mc.enableCursors()
+          else
+            mc.clearCursors()
+          end
+        end)
+      end)
+    end,
+  },
+
+  -- Extract method / extract variable (JetBrains Ctrl+Alt+M / Ctrl+Alt+V).
+  {
+    "ThePrimeagen/refactoring.nvim",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      "nvim-treesitter/nvim-treesitter",
+    },
+    opts = {},
+    keys = {
+      {
+        "<leader>rr",
+        function() require("refactoring").select_refactor() end,
+        mode = { "n", "x" },
+        desc = "Refactor…",
+      },
+      {
+        "<leader>rf",
+        function() require("refactoring").refactor("Extract Function") end,
+        mode = "x",
+        desc = "Extract function",
+      },
+      {
+        "<leader>rv",
+        function() require("refactoring").refactor("Extract Variable") end,
+        mode = "x",
+        desc = "Extract variable",
+      },
+      {
+        "<leader>ri",
+        function() require("refactoring").refactor("Inline Variable") end,
+        mode = { "n", "x" },
+        desc = "Inline variable",
+      },
+    },
+  },
+
   -- Reopen a project where you left it.
   {
     "folke/persistence.nvim",

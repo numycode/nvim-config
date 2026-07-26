@@ -41,4 +41,19 @@ require("lazy").setup({
   change_detection = {
     notify = false,
   },
+  performance = {
+    rtp = {
+      -- netrw is replaced by the snacks explorer; the rest are archive and
+      -- tutorial helpers this config never uses.
+      disabled_plugins = {
+        "gzip",
+        "netrwPlugin",
+        "rplugin",
+        "tarPlugin",
+        "tohtml",
+        "tutor",
+        "zipPlugin",
+      },
+    },
+  },
 })

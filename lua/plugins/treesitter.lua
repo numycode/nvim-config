@@ -104,65 +104,80 @@ local function textobjects()
 end
 
 return {
-  "nvim-treesitter/nvim-treesitter",
-  lazy = false,
-  dependencies = {
-    {
-      "nvim-treesitter/nvim-treesitter-textobjects",
-      branch = "main",
-      init = function()
-        -- Built-in ftplugin maps would otherwise shadow the motions below.
-        vim.g.no_plugin_maps = true
-      end,
+  {
+    "windwp/nvim-ts-autotag",
+    -- Limited to filetypes that actually have a parser installed; the previous
+    -- list included TS/Svelte/Vue, for which autotag silently did nothing.
+    ft = {
+      "html",
+      "javascript",
+      "javascriptreact",
+      "markdown",
+      "xml",
     },
+    opts = {},
   },
-  build = function()
-    local config_dir = vim.fs.normalize(vim.fn.stdpath("config"))
-    local local_cli = vim.fs.joinpath(config_dir, "node_modules", "tree-sitter-cli", "tree-sitter")
+  {
+    "nvim-treesitter/nvim-treesitter",
+    lazy = false,
+    dependencies = {
+      {
+        "nvim-treesitter/nvim-treesitter-textobjects",
+        branch = "main",
+        init = function()
+          -- Built-in ftplugin maps would otherwise shadow the motions below.
+          vim.g.no_plugin_maps = true
+        end,
+      },
+    },
+    build = function()
+      local config_dir = vim.fs.normalize(vim.fn.stdpath("config"))
+      local local_cli = vim.fs.joinpath(config_dir, "node_modules", "tree-sitter-cli", "tree-sitter")
 
-    if vim.fn.executable("tree-sitter") == 0 and vim.fn.filereadable(local_cli) == 1 then
-      vim.env.PATH = vim.fs.dirname(local_cli) .. ":" .. vim.env.PATH
-    end
+      if vim.fn.executable("tree-sitter") == 0 and vim.fn.filereadable(local_cli) == 1 then
+        vim.env.PATH = vim.fs.dirname(local_cli) .. ":" .. vim.env.PATH
+      end
 
-    if vim.fn.executable("tree-sitter") == 0 then
-      vim.notify("tree-sitter CLI not found; skipping parser installation", vim.log.levels.WARN)
-      return
-    end
+      if vim.fn.executable("tree-sitter") == 0 then
+        vim.notify("tree-sitter CLI not found; skipping parser installation", vim.log.levels.WARN)
+        return
+      end
 
-    require("nvim-treesitter").install(parsers):wait(300000)
-  end,
-  opts = {
-    filetypes = filetypes,
-  },
-  config = function(_, opts)
-    require("nvim-treesitter").setup()
+      require("nvim-treesitter").install(parsers):wait(300000)
+    end,
+    opts = {
+      filetypes = filetypes,
+    },
+    config = function(_, opts)
+      require("nvim-treesitter").setup()
 
-    require("nvim-treesitter-textobjects").setup({
-      select = {
-        lookahead = true,
-        selection_modes = {
-          ["@function.outer"] = "V",
-          ["@class.outer"] = "V",
-          ["@parameter.outer"] = "v",
+      require("nvim-treesitter-textobjects").setup({
+        select = {
+          lookahead = true,
+          selection_modes = {
+            ["@function.outer"] = "V",
+            ["@class.outer"] = "V",
+            ["@parameter.outer"] = "v",
+          },
         },
-      },
-      move = {
-        set_jumps = true,
-      },
-    })
+        move = {
+          set_jumps = true,
+        },
+      })
 
-    textobjects()
+      textobjects()
 
-    vim.api.nvim_create_autocmd("FileType", {
-      group = vim.api.nvim_create_augroup("treesitter_start", { clear = true }),
-      pattern = opts.filetypes,
-      callback = function() pcall(vim.treesitter.start) end,
-    })
+      vim.api.nvim_create_autocmd("FileType", {
+        group = vim.api.nvim_create_augroup("treesitter_start", { clear = true }),
+        pattern = opts.filetypes,
+        callback = function() pcall(vim.treesitter.start) end,
+      })
 
-    vim.api.nvim_create_autocmd("FileType", {
-      group = vim.api.nvim_create_augroup("treesitter_indent", { clear = true }),
-      pattern = opts.filetypes,
-      callback = function() vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()" end,
-    })
-  end,
+      vim.api.nvim_create_autocmd("FileType", {
+        group = vim.api.nvim_create_augroup("treesitter_indent", { clear = true }),
+        pattern = opts.filetypes,
+        callback = function() vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()" end,
+      })
+    end,
+  },
 }

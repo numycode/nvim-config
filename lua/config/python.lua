@@ -80,7 +80,7 @@ local function venv_python(dir)
 end
 
 --- Find the interpreter for the current project.
---- Without this, pyright resolves imports against the system interpreter and
+--- Without this, the server resolves imports against the system interpreter and
 --- every third-party import shows up as unresolved.
 ---@return string|nil path
 ---@return string|nil source
@@ -104,17 +104,26 @@ function M.detect_venv()
   return nil, nil
 end
 
---- Point pyright at `path` and reload it, for the buffer's project.
+-- Both read `python.pythonPath`; naming both keeps this working if the server
+-- is swapped back in lua/plugins/lsp.lua.
+local python_servers = { basedpyright = true, pyright = true }
+
+--- Point the Python language server at `path` for this project.
+---
+--- Deliberately does not touch `vim.g.python3_host_prog`: that names the
+--- interpreter hosting Neovim's `:python3` provider (which needs pynvim), not
+--- the project interpreter. Pointing it at a project venv forces Neovim to
+--- re-probe the provider, costing ~160ms on the first Python buffer.
 ---@param path string
 function M.set_python_path(path)
-  vim.g.python3_host_prog = path
+  for _, client in ipairs(vim.lsp.get_clients()) do
+    if python_servers[client.name] then
+      client.settings = vim.tbl_deep_extend("force", client.settings or {}, {
+        python = { pythonPath = path },
+      })
 
-  for _, client in ipairs(vim.lsp.get_clients({ name = "pyright" })) do
-    client.settings = vim.tbl_deep_extend("force", client.settings or {}, {
-      python = { pythonPath = path },
-    })
-
-    client:notify("workspace/didChangeConfiguration", { settings = client.settings })
+      client:notify("workspace/didChangeConfiguration", { settings = client.settings })
+    end
   end
 end
 
@@ -131,14 +140,14 @@ vim.api.nvim_create_autocmd({ "VimEnter", "DirChanged" }, {
   end,
 })
 
--- pyright may attach before or after the autocmd above has run; re-apply on
+-- The server may attach before or after the autocmd above has run; re-apply on
 -- attach so the interpreter always sticks.
 vim.api.nvim_create_autocmd("LspAttach", {
   group = augroup,
-  desc = "Re-apply the project interpreter when pyright attaches",
+  desc = "Re-apply the project interpreter when the Python server attaches",
   callback = function(event)
     local client = vim.lsp.get_client_by_id(event.data.client_id)
-    if not client or client.name ~= "pyright" then
+    if not client or not python_servers[client.name] then
       return
     end
 

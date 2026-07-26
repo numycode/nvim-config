@@ -3,7 +3,7 @@
 A hand-rolled Neovim IDE setup. No distro base — [lazy.nvim](https://github.com/folke/lazy.nvim)
 plus a curated plugin set, built around Python and JavaScript.
 
-Primary languages: **Python** (pyright, ruff, uv) and **JavaScript** (ts_ls, eslint, prettier).
+Primary languages: **Python** (basedpyright, ruff, uv) and **JavaScript** (ts_ls, eslint, prettier).
 TypeScript is deliberately not configured. Also covers Lua, Bash, HTML/CSS/SCSS, JSON, YAML,
 TOML, Markdown, SQL and XML.
 
@@ -23,7 +23,7 @@ developed against 0.12.
 | `ripgrep` | picker grep | `brew install ripgrep` | `apt install ripgrep` |
 | `fd` | picker file listing | `brew install fd` | `apt install fd-find` |
 | `node` + `npm` | ts_ls, eslint, emmet, prettierd, tree-sitter CLI | `brew install node` | `apt install nodejs npm` |
-| `python3` | pyright, ruff | preinstalled | `apt install python3` |
+| `python3` | basedpyright, ruff | preinstalled | `apt install python3` |
 | `uv` | `:UvSync`, venv detection | `brew install uv` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | `lazygit` | git panel (`<leader>gg`) | `brew install lazygit` | see [lazygit install](https://github.com/jesseduffield/lazygit#installation) |
 | A Nerd Font | icons throughout | `brew install --cask font-jetbrains-mono-nerd-font` | [nerdfonts.com](https://www.nerdfonts.com/) |
@@ -80,11 +80,10 @@ lua/plugins/
   completion.lua          blink.cmp, LuaSnip, autopairs
   lsp.lua                 server table, mason + mason-lspconfig
   treesitter.lua          parsers, textobjects, structural motions
-  editor.lua              trouble, todo-comments, aerial, flash, surround, persistence
+  editor.lua              trouble, todo-comments, aerial, flash, surround,
+                          multicursor, refactoring, persistence
   git.lua                 gitsigns, diffview
   formatting.lua          conform, format on save
-  html.lua                nvim-ts-autotag
-  tools.lua               mason-tool-installer
   wakatime.lua            time tracking
 ```
 
@@ -117,6 +116,8 @@ everything. `<leader>sk` searches all keymaps.
 | `<leader>x` | **diagnostics** — `xx` workspace, `xX` buffer, `xs` symbols, `xt` TODOs, `xq` quickfix, `xL` loclist |
 | `<leader>u` | **UI toggles** — `uC` colorscheme, `uh` inlay hints, `uw` wrap, `ul` relative numbers, `ud` diagnostics, `uF` format on save, `uc` sticky context |
 | `<leader>b` | **buffer** — `bd` delete, `bo` delete others, `bn` next, `bb` alternate, `bp` pin |
+| `<leader>r` | **refactor** — `rr` menu, `rf` extract function, `rv` extract variable, `ri` inline variable |
+| `<leader>m` | **multicursor** — `ma` cursor at next match, `mA` prev match, `ms` skip, `mm` all matches, `ml` split selection |
 | `<leader>S` | **session** — `Ss` restore, `Sl` last, `Sd` stop saving |
 | `<leader>t` | **terminal** — `tt` float, `tg` lazygit |
 
@@ -136,7 +137,12 @@ everything. `<leader>sk` searches all keymaps.
 | `]f` `[f` / `]c` `[c` / `]a` `[a` | Next/prev function / class / parameter |
 | `]t` `[t` | Next/prev TODO |
 | `]]` `[[` | Next/prev reference to symbol under cursor |
+| `<C-Up>` / `<C-Down>` | Add cursor above / below |
 | `<C-/>` | Toggle terminal |
+
+With multiple cursors active: `<left>`/`<right>` cycle between cursors, `<Esc>` clears them.
+In visual mode `I` and `A` insert at the start/end of every selected line — a superset of
+the built-in visual-block `I`/`A`, which also works charwise and linewise.
 
 ### Text objects
 
@@ -145,11 +151,11 @@ everything. `<leader>sk` searches all keymaps.
 
 ### Completion (blink.cmp)
 
-`<C-y>` accept · `<C-n>`/`<C-p>` cycle · `<C-space>` open menu or docs · `<C-e>` hide ·
-`<C-k>` signature help.
+`<Tab>` accept · `<Tab>`/`<S-Tab>` cycle and jump between snippet placeholders ·
+`<C-space>` open menu or docs · `<C-e>` hide · `<C-k>` signature help.
 
-Note `<Tab>` does **not** accept a completion. Set `keymap = { preset = "super-tab" }` in
-`lua/plugins/completion.lua` if you prefer that.
+This is the `super-tab` preset, matching JetBrains. Switch to `preset = "default"` in
+`lua/plugins/completion.lua` for vim-native `<C-y>` behaviour.
 
 ## Commands
 
@@ -167,12 +173,18 @@ Note `<Tab>` does **not** accept a completion. Set `keymap = { preset = "super-t
 ## Notes
 
 - **Python interpreter** is detected automatically from `$VIRTUAL_ENV`, `.venv`, `venv` or
-  `.env` under the project root and pushed into pyright. Without this, third-party imports
+  `.env` under the project root and pushed into basedpyright. Without this, third-party imports
   resolve against the system interpreter and show as unresolved. `:PythonVenv` reports what
   was picked.
-- **Inlay hints** are on by default where the server supports it. pyright does *not* implement
-  `textDocument/inlayHint` — swap `pyright` for `basedpyright` in `lua/plugins/lsp.lua` if you
-  want them in Python.
+- **Inlay hints** are on by default where the server supports it. Python uses
+  **basedpyright** rather than pyright precisely because pyright does not implement
+  `textDocument/inlayHint`. Toggle hints with `<leader>uh`.
+- **Only the servers listed in `lua/plugins/lsp.lua` run.** `automatic_enable` is off, so a
+  server left installed in Mason after you remove it from that table will not attach.
+- **Remote provider hosts are disabled** (`python3`, `perl`, `ruby`, `node`). Nothing here uses
+  them, and probing the python3 provider cost ~160 ms on the first Python buffer. Re-enable by
+  deleting the `loaded_*_provider` lines in `lua/config/options.lua` if you add a plugin that
+  needs `:python3`.
 - **Folding** uses the built-in `vim.lsp.foldexpr()`, so no nvim-ufo. Folds start open
   (`foldlevel = 99`).
 - **`H` and `L`** are remapped to buffer navigation, shadowing the built-in
@@ -182,5 +194,13 @@ Note `<Tab>` does **not** accept a completion. Set `keymap = { preset = "super-t
 
 ## Startup
 
-~150 ms warm with 33 plugins (~26 loaded eagerly), against ~64 ms for bare `nvim -u NONE`.
-Profile with `:Lazy profile` or `nvim --startuptime /tmp/st.log`.
+35 plugins. Warm timings, against ~64 ms for bare `nvim -u NONE`:
+
+| | Time |
+| --- | --- |
+| `nvim` (dashboard) | ~96 ms |
+| `nvim file.py` (full LSP path) | ~175 ms |
+
+The LSP chain — mason-lspconfig, blink.cmp, LuaSnip — is deferred to `BufReadPre`, so
+opening the dashboard never pays for it. Profile with `:Lazy profile` or
+`nvim --startuptime /tmp/st.log`.

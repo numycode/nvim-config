@@ -22,9 +22,10 @@ return {
     ---@module 'blink.cmp'
     ---@type blink.cmp.Config
     opts = {
-      -- default preset: <C-y> accept, <C-n>/<C-p> cycle, <C-space> menu/docs,
-      -- <C-e> hide, <C-k> signature help.
-      keymap = { preset = "default" },
+      -- super-tab preset: <Tab> accepts, <Tab>/<S-Tab> cycle and jump snippet
+      -- placeholders, <C-space> menu/docs, <C-e> hide, <C-k> signature help.
+      -- Matches what JetBrains does, unlike the vim-native <C-y>.
+      keymap = { preset = "super-tab" },
       snippets = { preset = "luasnip" },
       appearance = {
         nerd_font_variant = "mono",
