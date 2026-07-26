@@ -4,7 +4,8 @@ vim.api.nvim_create_autocmd("TextYankPost", {
   group = augroup,
   desc = "Highlight text after yanking",
   callback = function()
-    vim.highlight.on_yank()
+    -- vim.highlight.on_yank is deprecated since 0.11.
+    (vim.hl or vim.highlight).on_yank()
   end,
 })
 
@@ -26,10 +27,14 @@ vim.api.nvim_create_autocmd("FileType", {
   desc = "Close helper windows with q",
   pattern = {
     "checkhealth",
+    "gitsigns-blame",
     "help",
     "lspinfo",
     "man",
+    "notify",
     "qf",
+    "startuptime",
+    "trouble",
   },
   callback = function(event)
     vim.bo[event.buf].buflisted = false
@@ -45,6 +50,40 @@ vim.api.nvim_create_autocmd("LspAttach", {
   group = augroup,
   desc = "Set LSP buffer keymaps",
   callback = function(event)
-    require("config.lsp").on_attach(nil, event.buf)
+    local client = vim.lsp.get_client_by_id(event.data.client_id)
+    require("config.lsp").on_attach(client, event.buf)
+  end,
+})
+
+vim.api.nvim_create_autocmd("BufWritePre", {
+  group = augroup,
+  desc = "Create missing parent directories before writing",
+  callback = function(event)
+    if event.match:match("^%w%w+://") then
+      return
+    end
+
+    local file = vim.uv.fs_realpath(event.match) or event.match
+    vim.fn.mkdir(vim.fn.fnamemodify(file, ":p:h"), "p")
+  end,
+})
+
+vim.api.nvim_create_autocmd({ "FocusGained", "TermClose", "TermLeave" }, {
+  group = augroup,
+  desc = "Reload files changed outside of Neovim",
+  callback = function()
+    if vim.o.buftype ~= "nofile" then
+      vim.cmd("checktime")
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd("VimResized", {
+  group = augroup,
+  desc = "Equalize split sizes when the terminal is resized",
+  callback = function()
+    local tab = vim.fn.tabpagenr()
+    vim.cmd("tabdo wincmd =")
+    vim.cmd("tabnext " .. tab)
   end,
 })

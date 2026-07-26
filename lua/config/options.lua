@@ -34,4 +34,50 @@ opt.updatetime = 250
 opt.virtualedit = "block"
 opt.wrap = false
 
+opt.pumheight = 10
+opt.smoothscroll = true
+opt.splitkeep = "screen"
+opt.winborder = "rounded"
+opt.sessionoptions = {
+  "buffers",
+  "curdir",
+  "folds",
+  "globals",
+  "help",
+  "skiprtp",
+  "tabpages",
+  "winsize",
+}
+
+-- Folding driven by the LSP, with a treesitter fallback. `vim.lsp.foldexpr` is
+-- a 0.11+ builtin, which is why nvim-ufo is not needed.
+opt.foldmethod = "expr"
+opt.foldexpr = "v:lua.vim.lsp.foldexpr()"
+opt.foldtext = ""
+opt.foldlevel = 99
+opt.foldlevelstart = 99
+
 vim.g.have_nerd_font = true
+
+vim.diagnostic.config({
+  severity_sort = true,
+  underline = { severity = vim.diagnostic.severity.ERROR },
+  update_in_insert = false,
+  virtual_text = {
+    spacing = 4,
+    source = "if_many",
+    prefix = "●",
+  },
+  float = {
+    border = "rounded",
+    source = "if_many",
+  },
+  signs = {
+    text = {
+      [vim.diagnostic.severity.ERROR] = " ",
+      [vim.diagnostic.severity.WARN] = " ",
+      [vim.diagnostic.severity.INFO] = " ",
+      [vim.diagnostic.severity.HINT] = " ",
+    },
+  },
+})
