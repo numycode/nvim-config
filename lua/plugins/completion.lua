@@ -1,64 +1,67 @@
 return {
   {
-    "hrsh7th/nvim-cmp",
-    event = "InsertEnter",
+    "saghen/blink.cmp",
+    event = { "InsertEnter", "CmdlineEnter" },
     dependencies = {
-      "hrsh7th/cmp-buffer",
-      "hrsh7th/cmp-cmdline",
-      "hrsh7th/cmp-nvim-lsp",
-      "hrsh7th/cmp-path",
       "L3MON4D3/LuaSnip",
-      "saadparwaiz1/cmp_luasnip",
       "rafamadriz/friendly-snippets",
     },
-    config = function()
-      local cmp = require("cmp")
-      local luasnip = require("luasnip")
-
+    -- Tagged releases ship a prebuilt Rust fuzzy matcher, downloaded on first
+    -- run, so no build step and no Rust toolchain are required. If the download
+    -- is unavailable on some platform, set `fuzzy.implementation = "lua"` below.
+    version = "*",
+    ---@module 'blink.cmp'
+    ---@type blink.cmp.Config
+    opts = {
+      -- default preset: <C-y> accept, <C-n>/<C-p> cycle, <C-space> menu/docs,
+      -- <C-e> hide, <C-k> signature help.
+      keymap = { preset = "default" },
+      snippets = { preset = "luasnip" },
+      appearance = {
+        nerd_font_variant = "mono",
+      },
+      -- Parameter hints, equivalent to JetBrains Ctrl+P.
+      signature = {
+        enabled = true,
+        window = { border = "rounded" },
+      },
+      completion = {
+        -- JetBrains shows documentation alongside the completion list by default.
+        documentation = {
+          auto_show = true,
+          auto_show_delay_ms = 200,
+          window = { border = "rounded" },
+        },
+        menu = {
+          border = "rounded",
+          draw = {
+            treesitter = { "lsp" },
+          },
+        },
+        ghost_text = { enabled = true },
+      },
+      sources = {
+        default = { "lsp", "path", "snippets", "buffer" },
+      },
+      -- Finally wires up cmdline completion, which cmp-cmdline was installed
+      -- for but never configured.
+      cmdline = {
+        enabled = true,
+        keymap = { preset = "cmdline" },
+        completion = {
+          menu = { auto_show = true },
+          list = { selection = { preselect = false, auto_insert = true } },
+        },
+      },
+      fuzzy = { implementation = "rust" },
+    },
+    opts_extend = { "sources.default" },
+    config = function(_, opts)
       require("luasnip.loaders.from_vscode").lazy_load()
-
-      cmp.setup({
-        snippet = {
-          expand = function(args)
-            luasnip.lsp_expand(args.body)
-          end,
-        },
-        mapping = cmp.mapping.preset.insert({
-          ["<C-Space>"] = cmp.mapping.complete(),
-          ["<CR>"] = cmp.mapping.confirm({ select = true }),
-          ["<C-e>"] = cmp.mapping.abort(),
-          ["<Tab>"] = cmp.mapping(function(fallback)
-            if cmp.visible() then
-              cmp.select_next_item()
-            elseif luasnip.expand_or_jumpable() then
-              luasnip.expand_or_jump()
-            else
-              fallback()
-            end
-          end, { "i", "s" }),
-          ["<S-Tab>"] = cmp.mapping(function(fallback)
-            if cmp.visible() then
-              cmp.select_prev_item()
-            elseif luasnip.jumpable(-1) then
-              luasnip.jump(-1)
-            else
-              fallback()
-            end
-          end, { "i", "s" }),
-        }),
-        sources = cmp.config.sources({
-          { name = "nvim_lsp" },
-          { name = "luasnip" },
-          { name = "path" },
-        }, {
-          { name = "buffer" },
-        }),
-        formatting = {
-          fields = { "abbr", "kind", "menu" },
-        },
-      })
+      require("blink.cmp").setup(opts)
     end,
   },
+
   {
     "windwp/nvim-autopairs",
     event = "InsertEnter",

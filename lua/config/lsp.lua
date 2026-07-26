@@ -1,14 +1,13 @@
 local M = {}
 
 function M.capabilities()
-  local capabilities = vim.lsp.protocol.make_client_capabilities()
-  local ok, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
+  local ok, blink = pcall(require, "blink.cmp")
 
   if ok then
-    capabilities = cmp_nvim_lsp.default_capabilities(capabilities)
+    return blink.get_lsp_capabilities()
   end
 
-  return capabilities
+  return vim.lsp.protocol.make_client_capabilities()
 end
 
 function M.on_attach(_, bufnr)
