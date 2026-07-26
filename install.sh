@@ -387,6 +387,11 @@ ensure_base_packages() {
         npm:npm
         python3:python3
       )
+      # Mason installs basedpyright and ruff from PyPI into a venv. Debian
+      # splits both out of python3, and without them those two silently fail to
+      # install, leaving Python with no language server.
+      have pip3 || spec+=(pip3:python3-pip)
+      python3 -c 'import venv' >/dev/null 2>&1 || spec+=(__venv:python3-venv)
       # Debian names the fd binary `fdfind`; either satisfies the requirement.
       have fdfind || have fd || spec+=(fd:fd-find)
       $SKIP_FONT || spec+=(fc-cache:fontconfig)
@@ -406,6 +411,8 @@ ensure_base_packages() {
         npm:npm
         python3:python3
       )
+      # See the Debian note above: Mason needs pip to install basedpyright/ruff.
+      have pip3 || spec+=(pip3:python3-pip)
       $SKIP_FONT || spec+=(fc-cache:fontconfig)
       ;;
   esac
@@ -414,7 +421,12 @@ ensure_base_packages() {
   for entry in "${spec[@]}"; do
     binary="${entry%%:*}"
     package="${entry##*:}"
-    have "$binary" || want+=("$package")
+    # A leading __ marks an entry already resolved above, not a real command.
+    if [[ "$binary" == __* ]]; then
+      want+=("$package")
+    else
+      have "$binary" || want+=("$package")
+    fi
   done
 
   # De-duplicate (build-essential can be added twice).
@@ -748,13 +760,15 @@ sync_neovim() {
 
   info "Installing treesitter parsers"
   nvim --headless -c 'lua
-    local parsers = require("config.parsers").parsers
-    local nts = require("nvim-treesitter")
-    local installed = {}
-    for _, name in ipairs(nts.get_installed("parsers") or {}) do installed[name] = true end
-    local missing = vim.tbl_filter(function(n) return not installed[n] end, parsers)
-    if #missing > 0 then nts.install(missing):wait(900000) end
-    print(("parsers: %d/%d installed"):format(#(nts.get_installed("parsers") or {}), #parsers))
+    local ok, res = pcall(function()
+      return { require("config.parsers").ensure({ timeout_ms = 900000 }) }
+    end)
+    if not ok then
+      print("parsers: FAILED " .. tostring(res))
+    else
+      local installed, wanted, err = res[1], res[2], res[3]
+      print(("parsers: %d/%d installed%s"):format(installed, wanted, err and (" (" .. err .. ")") or ""))
+    end
   ' +qa 2>&1 | grep -E '^parsers:' || true
 
   # The LSP stack is lazy-loaded on BufReadPre so the dashboard stays fast,

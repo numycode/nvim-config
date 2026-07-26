@@ -2,55 +2,6 @@ local ts = require("config.parsers")
 local parsers = ts.parsers
 local filetypes = ts.filetypes
 
--- Put the vendored tree-sitter CLI on PATH when there is no system one.
-local function ensure_tree_sitter_cli()
-  if vim.fn.executable("tree-sitter") == 1 then
-    return true
-  end
-
-  local config_dir = vim.fs.normalize(vim.fn.stdpath("config"))
-  local local_cli = vim.fs.joinpath(config_dir, "node_modules", "tree-sitter-cli", "tree-sitter")
-
-  if vim.fn.filereadable(local_cli) == 1 then
-    vim.env.PATH = vim.fs.dirname(local_cli) .. ":" .. vim.env.PATH
-  end
-
-  return vim.fn.executable("tree-sitter") == 1
-end
-
--- Fetch any parser that is not already on disk. This lives here rather than in
--- lazy.nvim's `build`, which only runs when the plugin itself is installed or
--- updated: adding a parser to lua/config/parsers.lua would never fetch it.
--- Runs asynchronously so startup is not blocked; install.sh does the same
--- synchronously during setup.
-local function install_missing_parsers(nvim_treesitter)
-  local have_cli = ensure_tree_sitter_cli()
-
-  local installed = {}
-  for _, name in ipairs(nvim_treesitter.get_installed("parsers") or {}) do
-    installed[name] = true
-  end
-
-  local missing = vim.tbl_filter(function(name) return not installed[name] end, parsers)
-
-  if #missing == 0 then
-    return
-  end
-
-  if not have_cli then
-    vim.notify(
-      ("tree-sitter CLI not found; %d parsers cannot be installed. Run `npm install` in %s."):format(
-        #missing,
-        vim.fn.stdpath("config")
-      ),
-      vim.log.levels.WARN
-    )
-    return
-  end
-
-  nvim_treesitter.install(missing)
-end
-
 -- Structural motions and text objects, the rough equivalent of JetBrains'
 -- Ctrl+W expand-selection and Alt+Up/Down structural navigation.
 local function textobjects()
@@ -133,7 +84,12 @@ return {
       local nvim_treesitter = require("nvim-treesitter")
       nvim_treesitter.setup()
 
-      install_missing_parsers(nvim_treesitter)
+      -- Fetch any parser that is missing. Asynchronous so startup is not
+      -- blocked; install.sh calls the same function synchronously during setup.
+      local _, _, ts_err = ts.ensure()
+      if ts_err then
+        vim.notify(ts_err, vim.log.levels.WARN)
+      end
 
       require("nvim-treesitter-textobjects").setup({
         select = {
