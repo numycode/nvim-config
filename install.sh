@@ -18,7 +18,10 @@
 set -euo pipefail
 
 readonly NVIM_MIN_MAJOR=0
-readonly NVIM_MIN_MINOR=11
+# 0.12, not 0.11: nvim-treesitter's main branch calls vim.list.unique(), which
+# does not exist before 0.12, and parser installation fails without it. No
+# distro packages 0.12 yet, so this normally means the upstream tarball.
+readonly NVIM_MIN_MINOR=12
 readonly NERD_FONT="JetBrainsMono"
 
 # Overridable so a fork or branch can be installed:
@@ -124,7 +127,7 @@ Supported platforms:
 
 Tools installed from upstream rather than the system package manager, because
 distro versions are frequently too old or absent:
-  neovim   when the packaged version is older than 0.11 (Debian stable ships 0.10)
+  neovim   when the packaged version is older than 0.12 (no distro packages it yet)
   lazygit  when not packaged (absent from Debian bookworm)
   uv       always, via the official Astral installer
 EOF

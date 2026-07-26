@@ -9,8 +9,11 @@ TOML, Markdown, SQL and XML.
 
 ## Requirements
 
-Neovim **0.11+** is required (`vim.lsp.config`, `vim.lsp.foldexpr`, `vim.hl.on_yank`);
-developed against 0.12.
+Neovim **0.12+** is required. The 0.11 APIs this config uses (`vim.lsp.config`,
+`vim.lsp.foldexpr`, `vim.hl.on_yank`) are not the constraint — `nvim-treesitter`'s `main`
+branch calls `vim.list.unique()`, which does not exist before 0.12, and parser installation
+fails without it. No distribution packages 0.12 yet, so `install.sh` installs the upstream
+tarball on Linux.
 
 `./install.sh` installs all of this for you — see [Install](#install). The table below is
 what it sets up, and what to install by hand on an unsupported platform.
@@ -19,7 +22,7 @@ what it sets up, and what to install by hand on an unsupported platform.
 
 | Tool | Used for | macOS | Debian / Ubuntu |
 | --- | --- | --- | --- |
-| `neovim` ≥ 0.11 | — | `brew install neovim` | `apt install neovim` |
+| `neovim` ≥ 0.12 | — | `brew install neovim` | installed from the upstream tarball by `install.sh` |
 | `git` | lazy.nvim, Mason, gitsigns | preinstalled | `apt install git` |
 | `curl`, `unzip`, `tar`, `gzip` | Mason downloads | preinstalled | `apt install curl unzip tar gzip` |
 | C compiler + `make` | Treesitter parsers | `xcode-select --install` | `apt install build-essential` |
@@ -95,8 +98,9 @@ symlinks that directory to `~/.config/nvim`; an existing config is moved aside t
 Three tools come from upstream rather than the system package manager, because the packaged
 versions are too old or missing:
 
-- **Neovim** — only when the packaged build is older than 0.11. Debian stable ships 0.10.4,
-  which this config cannot run on. Installed to `/opt/nvim` with a symlink in `/usr/local/bin`.
+- **Neovim** — whenever the packaged build is older than 0.12, which today means every
+  distribution (Debian stable ships 0.10.4, Ubuntu 0.11.6, Fedora 41 0.10.4). Installed to
+  `/opt/nvim` with a symlink in `/usr/local/bin`.
 - **lazygit** — absent from Debian bookworm. Installed to `~/.local/bin`.
 - **uv** — via the official Astral installer.
 
@@ -147,6 +151,9 @@ lua/config/
   keymaps.lua             plugin-independent keymaps
   autocmds.lua            yank highlight, cursor restore, LspAttach, mkdir-on-write
   lsp.lua                 capabilities + on_attach (buffer-local LSP keymaps)
+  servers.lua             LSP servers and their settings (read by install.sh)
+  parsers.lua             treesitter parsers + install (read by install.sh)
+  tools.lua               formatters/linters for Mason (read by install.sh)
   python.lua              venv auto-detection, :UvSync / :UvAdd / :UvRun / :RuffCheck
 lua/plugins/
   snacks.lua              picker, explorer, dashboard, terminal, lazygit, notifier
