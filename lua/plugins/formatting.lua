@@ -32,9 +32,12 @@ return {
     config = function(_, opts)
       require("conform").setup(opts)
 
-      vim.keymap.set({ "n", "v" }, "<leader>cf", function()
-        require("conform").format({ async = true, lsp_format = "fallback" })
-      end, { desc = "Format buffer", silent = true })
+      vim.keymap.set(
+        { "n", "v" },
+        "<leader>cf",
+        function() require("conform").format({ async = true, lsp_format = "fallback" }) end,
+        { desc = "Format buffer", silent = true }
+      )
 
       vim.api.nvim_create_user_command("FormatDisable", function(args)
         if args.bang then
@@ -56,10 +59,7 @@ return {
 
       vim.keymap.set("n", "<leader>uF", function()
         vim.g.disable_autoformat = not vim.g.disable_autoformat
-        vim.notify(
-          "Format on save " .. (vim.g.disable_autoformat and "disabled" or "enabled"),
-          vim.log.levels.INFO
-        )
+        vim.notify("Format on save " .. (vim.g.disable_autoformat and "disabled" or "enabled"), vim.log.levels.INFO)
       end, { desc = "Toggle format on save", silent = true })
     end,
   },

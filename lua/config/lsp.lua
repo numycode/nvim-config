@@ -42,7 +42,13 @@ function M.on_attach(client, bufnr)
 
   -- Navigation
   map("n", "gd", pick("lsp_definitions", vim.lsp.buf.definition), "Goto definition", methods.textDocument_definition)
-  map("n", "gD", pick("lsp_declarations", vim.lsp.buf.declaration), "Goto declaration", methods.textDocument_declaration)
+  map(
+    "n",
+    "gD",
+    pick("lsp_declarations", vim.lsp.buf.declaration),
+    "Goto declaration",
+    methods.textDocument_declaration
+  )
   map("n", "gr", pick("lsp_references", vim.lsp.buf.references), "References", methods.textDocument_references)
   map(
     "n",
@@ -68,9 +74,7 @@ function M.on_attach(client, bufnr)
   map({ "n", "v" }, "<leader>ca", vim.lsp.buf.code_action, "Code action", methods.textDocument_codeAction)
   map("n", "<leader>cr", vim.lsp.buf.rename, "Rename symbol", methods.textDocument_rename)
   map("n", "<leader>rn", vim.lsp.buf.rename, "Rename symbol", methods.textDocument_rename)
-  map("n", "<leader>cR", function()
-    require("snacks").rename.rename_file()
-  end, "Rename file")
+  map("n", "<leader>cR", function() require("snacks").rename.rename_file() end, "Rename file")
 
   -- Symbols
   map(

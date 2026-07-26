@@ -46,20 +46,14 @@ return {
 
         map("n", "<leader>ghs", gs.stage_hunk, "Stage hunk")
         map("n", "<leader>ghr", gs.reset_hunk, "Reset hunk")
-        map("v", "<leader>ghs", function()
-          gs.stage_hunk({ vim.fn.line("."), vim.fn.line("v") })
-        end, "Stage selection")
-        map("v", "<leader>ghr", function()
-          gs.reset_hunk({ vim.fn.line("."), vim.fn.line("v") })
-        end, "Reset selection")
+        map("v", "<leader>ghs", function() gs.stage_hunk({ vim.fn.line("."), vim.fn.line("v") }) end, "Stage selection")
+        map("v", "<leader>ghr", function() gs.reset_hunk({ vim.fn.line("."), vim.fn.line("v") }) end, "Reset selection")
 
         map("n", "<leader>ghS", gs.stage_buffer, "Stage buffer")
         map("n", "<leader>ghR", gs.reset_buffer, "Reset buffer")
         map("n", "<leader>ghp", gs.preview_hunk_inline, "Preview hunk")
         map("n", "<leader>ghd", gs.diffthis, "Diff this")
-        map("n", "<leader>ghb", function()
-          gs.blame_line({ full = true })
-        end, "Blame line")
+        map("n", "<leader>ghb", function() gs.blame_line({ full = true }) end, "Blame line")
         map("n", "<leader>ghB", gs.toggle_current_line_blame, "Toggle line blame")
 
         map({ "o", "x" }, "ih", gs.select_hunk, "Hunk")

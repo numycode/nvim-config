@@ -3,8 +3,17 @@ return {
     "saghen/blink.cmp",
     event = { "InsertEnter", "CmdlineEnter" },
     dependencies = {
-      "L3MON4D3/LuaSnip",
-      "rafamadriz/friendly-snippets",
+      {
+        "L3MON4D3/LuaSnip",
+        dependencies = { "rafamadriz/friendly-snippets" },
+        -- blink is pulled in during startup by config.lsp.capabilities(), and
+        -- lazy.nvim always loads dependencies with their parent, so LuaSnip
+        -- itself cannot be deferred. Scanning the friendly-snippets collection
+        -- can be, which is the bulk of the cost.
+        config = function()
+          vim.schedule(function() require("luasnip.loaders.from_vscode").lazy_load() end)
+        end,
+      },
     },
     -- Tagged releases ship a prebuilt Rust fuzzy matcher, downloaded on first
     -- run, so no build step and no Rust toolchain are required. If the download
@@ -56,10 +65,6 @@ return {
       fuzzy = { implementation = "rust" },
     },
     opts_extend = { "sources.default" },
-    config = function(_, opts)
-      require("luasnip.loaders.from_vscode").lazy_load()
-      require("blink.cmp").setup(opts)
-    end,
   },
 
   {

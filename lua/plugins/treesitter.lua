@@ -62,9 +62,7 @@ local function textobjects()
   local move = require("nvim-treesitter-textobjects.move")
   local swap = require("nvim-treesitter-textobjects.swap")
 
-  local function map(mode, lhs, rhs, desc)
-    vim.keymap.set(mode, lhs, rhs, { silent = true, desc = desc })
-  end
+  local function map(mode, lhs, rhs, desc) vim.keymap.set(mode, lhs, rhs, { silent = true, desc = desc }) end
 
   local selections = {
     { "af", "@function.outer", "a function" },
@@ -81,9 +79,7 @@ local function textobjects()
 
   for _, entry in ipairs(selections) do
     local lhs, query, desc = entry[1], entry[2], entry[3]
-    map({ "x", "o" }, lhs, function()
-      select.select_textobject(query, "textobjects")
-    end, desc)
+    map({ "x", "o" }, lhs, function() select.select_textobject(query, "textobjects") end, desc)
   end
 
   local movements = {
@@ -99,18 +95,12 @@ local function textobjects()
 
   for _, entry in ipairs(movements) do
     local lhs, fn, query, desc = entry[1], entry[2], entry[3], entry[4]
-    map({ "n", "x", "o" }, lhs, function()
-      move[fn](query, "textobjects")
-    end, desc)
+    map({ "n", "x", "o" }, lhs, function() move[fn](query, "textobjects") end, desc)
   end
 
-  map("n", "<leader>cx", function()
-    swap.swap_next("@parameter.inner")
-  end, "Swap parameter next")
+  map("n", "<leader>cx", function() swap.swap_next("@parameter.inner") end, "Swap parameter next")
 
-  map("n", "<leader>cX", function()
-    swap.swap_previous("@parameter.inner")
-  end, "Swap parameter previous")
+  map("n", "<leader>cX", function() swap.swap_previous("@parameter.inner") end, "Swap parameter previous")
 end
 
 return {
@@ -166,17 +156,13 @@ return {
     vim.api.nvim_create_autocmd("FileType", {
       group = vim.api.nvim_create_augroup("treesitter_start", { clear = true }),
       pattern = opts.filetypes,
-      callback = function()
-        pcall(vim.treesitter.start)
-      end,
+      callback = function() pcall(vim.treesitter.start) end,
     })
 
     vim.api.nvim_create_autocmd("FileType", {
       group = vim.api.nvim_create_augroup("treesitter_indent", { clear = true }),
       pattern = opts.filetypes,
-      callback = function()
-        vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
-      end,
+      callback = function() vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()" end,
     })
   end,
 }

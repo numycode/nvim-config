@@ -44,16 +44,12 @@ return {
                 return ""
               end
 
-              local names = vim.tbl_map(function(client)
-                return client.name
-              end, clients)
+              local names = vim.tbl_map(function(client) return client.name end, clients)
 
               table.sort(names)
               return " " .. table.concat(names, ", ")
             end,
-            cond = function()
-              return vim.bo.buftype == ""
-            end,
+            cond = function() return vim.bo.buftype == "" end,
           },
           "filetype",
         },
@@ -136,9 +132,7 @@ return {
     keys = {
       {
         "<leader>cp",
-        function()
-          require("dropbar.api").pick()
-        end,
+        function() require("dropbar.api").pick() end,
         desc = "Pick breadcrumb",
       },
     },
@@ -156,9 +150,7 @@ return {
     keys = {
       {
         "<leader>uc",
-        function()
-          require("treesitter-context").toggle()
-        end,
+        function() require("treesitter-context").toggle() end,
         desc = "Toggle sticky context",
       },
     },
@@ -170,9 +162,7 @@ return {
     event = "VeryLazy",
     opts = {
       preset = "modern",
-      delay = function(ctx)
-        return ctx.plugin and 0 or 300
-      end,
+      delay = function(ctx) return ctx.plugin and 0 or 300 end,
       spec = {
         { "<leader>b", group = "buffer" },
         { "<leader>c", group = "code" },
@@ -192,9 +182,7 @@ return {
     keys = {
       {
         "<leader>?",
-        function()
-          require("which-key").show({ global = false })
-        end,
+        function() require("which-key").show({ global = false }) end,
         desc = "Buffer keymaps",
       },
     },

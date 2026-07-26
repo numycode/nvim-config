@@ -96,9 +96,12 @@ return {
     },
     config = function(_, opts)
       for name, config in pairs(servers) do
-        vim.lsp.config(name, vim.tbl_deep_extend("force", {
-          capabilities = lsp.capabilities(),
-        }, config))
+        vim.lsp.config(
+          name,
+          vim.tbl_deep_extend("force", {
+            capabilities = lsp.capabilities(),
+          }, config)
+        )
       end
 
       require("mason-lspconfig").setup(opts)

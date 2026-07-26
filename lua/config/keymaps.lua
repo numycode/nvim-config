@@ -2,15 +2,11 @@
 -- the ones that do not depend on a plugin being loaded.
 local keymap = vim.keymap.set
 
-local function opts(desc)
-  return { desc = desc, silent = true }
-end
+local function opts(desc) return { desc = desc, silent = true } end
 
 local function diagnostic_jump(count)
   if vim.diagnostic.jump then
-    return function()
-      vim.diagnostic.jump({ count = count, float = true })
-    end
+    return function() vim.diagnostic.jump({ count = count, float = true }) end
   end
 
   return count > 0 and vim.diagnostic.goto_next or vim.diagnostic.goto_prev
@@ -39,12 +35,18 @@ keymap("n", "<leader>bb", "<cmd>edit #<CR>", opts("Alternate buffer"))
 -- <leader>e is now the file explorer.
 keymap("n", "]d", diagnostic_jump(1), opts("Next diagnostic"))
 keymap("n", "[d", diagnostic_jump(-1), opts("Previous diagnostic"))
-keymap("n", "]e", function()
-  vim.diagnostic.jump({ count = 1, severity = vim.diagnostic.severity.ERROR, float = true })
-end, opts("Next error"))
-keymap("n", "[e", function()
-  vim.diagnostic.jump({ count = -1, severity = vim.diagnostic.severity.ERROR, float = true })
-end, opts("Previous error"))
+keymap(
+  "n",
+  "]e",
+  function() vim.diagnostic.jump({ count = 1, severity = vim.diagnostic.severity.ERROR, float = true }) end,
+  opts("Next error")
+)
+keymap(
+  "n",
+  "[e",
+  function() vim.diagnostic.jump({ count = -1, severity = vim.diagnostic.severity.ERROR, float = true }) end,
+  opts("Previous error")
+)
 keymap("n", "<leader>cd", vim.diagnostic.open_float, opts("Line diagnostics"))
 keymap("n", "<leader>xl", vim.diagnostic.setloclist, opts("Diagnostics to loclist"))
 

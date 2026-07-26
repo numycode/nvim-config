@@ -1,8 +1,6 @@
 local M = {}
 
-local function project_root()
-  return vim.fs.root(0, { "pyproject.toml", "uv.lock", ".git" }) or vim.fn.getcwd()
-end
+local function project_root() return vim.fs.root(0, { "pyproject.toml", "uv.lock", ".git" }) or vim.fn.getcwd() end
 
 local function run_async(cmd, desc)
   vim.system(cmd, {
@@ -25,15 +23,12 @@ local function run_async(cmd, desc)
   end)
 end
 
-vim.api.nvim_create_user_command("UvSync", function()
-  run_async({ "uv", "sync" }, "uv sync")
-end, {
+vim.api.nvim_create_user_command("UvSync", function() run_async({ "uv", "sync" }, "uv sync") end, {
   desc = "Sync the current Python project with uv",
 })
 
 vim.api.nvim_create_user_command("RuffCheck", function()
-  local executable = vim.fn.executable("ruff") == 1 and { "ruff", "check", "." }
-    or { "uvx", "ruff", "check", "." }
+  local executable = vim.fn.executable("ruff") == 1 and { "ruff", "check", "." } or { "uvx", "ruff", "check", "." }
 
   run_async(executable, "ruff check")
 end, {

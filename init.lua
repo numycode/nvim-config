@@ -32,6 +32,8 @@ require("lazy").setup({
     { import = "plugins" },
   },
   install = { colorscheme = { "tokyonight-night", "habamax" } },
+  -- No plugin here uses luarocks; skip the hererocks bootstrap.
+  rocks = { enabled = false },
   checker = {
     enabled = true,
     notify = false,

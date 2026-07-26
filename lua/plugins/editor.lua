@@ -40,23 +40,17 @@ return {
       { "<leader>xt", "<cmd>Trouble todo toggle<CR>", desc = "TODOs" },
       {
         "<leader>st",
-        function()
-          require("snacks").picker.todo_comments()
-        end,
+        function() require("snacks").picker.todo_comments() end,
         desc = "TODOs (picker)",
       },
       {
         "]t",
-        function()
-          require("todo-comments").jump_next()
-        end,
+        function() require("todo-comments").jump_next() end,
         desc = "Next TODO",
       },
       {
         "[t",
-        function()
-          require("todo-comments").jump_prev()
-        end,
+        function() require("todo-comments").jump_prev() end,
         desc = "Previous TODO",
       },
     },
@@ -93,26 +87,20 @@ return {
       {
         "s",
         mode = { "n", "x", "o" },
-        function()
-          require("flash").jump()
-        end,
+        function() require("flash").jump() end,
         desc = "Flash jump",
       },
       {
         -- Deliberately not mapped in visual mode: nvim-surround owns `S` there.
         "S",
         mode = { "n", "o" },
-        function()
-          require("flash").treesitter()
-        end,
+        function() require("flash").treesitter() end,
         desc = "Flash treesitter",
       },
       {
         "<C-s>",
         mode = { "c" },
-        function()
-          require("flash").toggle()
-        end,
+        function() require("flash").toggle() end,
         desc = "Toggle flash search",
       },
     },
@@ -134,23 +122,17 @@ return {
     keys = {
       {
         "<leader>Ss",
-        function()
-          require("persistence").load()
-        end,
+        function() require("persistence").load() end,
         desc = "Restore session",
       },
       {
         "<leader>Sl",
-        function()
-          require("persistence").load({ last = true })
-        end,
+        function() require("persistence").load({ last = true }) end,
         desc = "Restore last session",
       },
       {
         "<leader>Sd",
-        function()
-          require("persistence").stop()
-        end,
+        function() require("persistence").stop() end,
         desc = "Do not save session",
       },
     },
