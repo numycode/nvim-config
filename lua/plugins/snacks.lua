@@ -92,8 +92,9 @@ return {
       },
       {
         "<leader>e",
-        function() Snacks.explorer() end,
-        desc = "File explorer",
+        -- Same handler as the tabline's project button, so mouse and keyboard agree.
+        function() _G.NvimTabline.toggle_explorer() end,
+        desc = "Toggle file explorer",
       },
       {
         "<leader>n",

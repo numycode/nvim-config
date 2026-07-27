@@ -88,6 +88,24 @@ which need basedpyright.
 installed in Mason, so removing one from `servers.lua` would not stop it running. Servers are
 enabled explicitly via `vim.lsp.enable()`.
 
+**`showtabline` belongs to us, not to bufferline.** `auto_toggle_bufferline = false` is set in
+`ui.lua` because bufferline's `toggle_bufferline()` runs on *every* tabline redraw and re-pins
+the option, silently reverting anything an autocmd set. That is what defeats the obvious way to
+keep tabs off the snacks dashboard — the autocmd fires, then the next redraw undoes it. With
+auto-toggling off, the `bufferline-dashboard` autocmds own the value outright.
+
+**bufferline renders `offsets` *before* `custom_areas`** (`bufferline/ui.lua`, the `utils.join`
+at the end of `M.tabline`). The tabline's project button therefore cannot use an offset for the
+explorer sidebar: it would be shoved 41 columns right the moment the sidebar opened, out from
+under the pointer that just clicked it. The custom area does the offset's job instead — button,
+padding to the sidebar width, then a `│` on the split column.
+
+**Only `custom_areas` can hold a clickable label.** Their text is concatenated into the tabline
+verbatim and measured with `nvim_eval_statusline`, so `%@v:lua.Fn@…%X` survives and is sized
+correctly. An `offsets` entry cannot: `get_section_text` measures with `nvim_strwidth`, which
+counts the `%` escapes as visible characters and corrupts the layout. Click labels also only
+reach global functions, hence `_G.NvimTabline`.
+
 **Remote provider hosts are disabled** (`python3`, `perl`, `ruby`, `node`) in `options.lua`.
 vim-wakatime probes `has('python3')`, and Neovim answered by spawning an interpreter — ~160ms
 on the first Python buffer.

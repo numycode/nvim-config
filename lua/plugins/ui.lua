@@ -1,3 +1,30 @@
+-- Custom-area highlights take literal colours rather than a highlight link, so pull
+-- one from the active colorscheme instead of hardcoding a tokyonight blue.
+local function hl_fg(group)
+  local ok, hl = pcall(vim.api.nvim_get_hl, 0, { name = group, link = false })
+
+  return ok and hl.fg and string.format("#%06x", hl.fg) or nil
+end
+
+-- Width of the explorer sidebar, or nil when it is closed.
+local function sidebar_width()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local buf = vim.api.nvim_win_get_buf(win)
+
+    if
+      vim.bo[buf].filetype == "snacks_layout_box"
+      and vim.api.nvim_win_get_config(win).relative == ""
+      and vim.api.nvim_win_get_position(win)[2] == 0
+    then
+      return vim.api.nvim_win_get_width(win)
+    end
+  end
+end
+
+-- Width a tabline fragment occupies once its `%` escapes are resolved. This is how
+-- bufferline sizes custom areas (bufferline/custom_area.lua), so the two agree.
+local function tabline_width(text) return vim.api.nvim_eval_statusline(text, { use_tabline = true }).width end
+
 return {
   {
     "nvim-tree/nvim-web-devicons",
@@ -60,11 +87,48 @@ return {
     },
   },
 
-  -- Editor tabs across the top.
+  -- Editor tabs across the top, with a JetBrains-style project button at the left.
   {
     "akinsho/bufferline.nvim",
     event = "VeryLazy",
     dependencies = { "nvim-tree/nvim-web-devicons" },
+    init = function()
+      -- Tabline click labels can only reach global functions (`:h statusline`), which
+      -- is why this hangs off `_G` rather than living in the spec. Neovim calls it as
+      -- (minwid, clicks, button, modifiers); none of that matters here.
+      _G.NvimTabline = {
+        toggle_explorer = function()
+          -- `Snacks.picker.get` filters out closed pickers, so a hit means it is open.
+          local explorer = Snacks.picker.get({ source = "explorer" })[1]
+
+          if explorer then
+            explorer:close()
+          else
+            Snacks.explorer()
+          end
+        end,
+      }
+
+      -- Tabs would otherwise be drawn over the dashboard splash. lualine excludes it
+      -- via `disabled_filetypes`; bufferline has no equivalent, and its own
+      -- `toggle_bufferline` re-pins `showtabline` on every redraw, overriding anything
+      -- set here. Hence `auto_toggle_bufferline = false` below: the option is ours.
+      local group = vim.api.nvim_create_augroup("bufferline-dashboard", { clear = true })
+
+      vim.api.nvim_create_autocmd("FileType", {
+        group = group,
+        pattern = "snacks_dashboard",
+        callback = function() vim.o.showtabline = 0 end,
+      })
+      vim.api.nvim_create_autocmd("BufEnter", {
+        group = group,
+        callback = function()
+          if vim.bo.filetype ~= "snacks_dashboard" then
+            vim.o.showtabline = 2
+          end
+        end,
+      })
+    end,
     opts = {
       options = {
         mode = "buffers",
@@ -85,15 +149,43 @@ return {
         separator_style = "slant",
         show_buffer_close_icons = true,
         show_close_icon = false,
-        always_show_bufferline = false,
-        offsets = {
-          {
-            filetype = "snacks_layout_box",
-            text = "Explorer",
-            highlight = "Directory",
-            text_align = "left",
-            separator = true,
-          },
+        always_show_bufferline = true,
+        auto_toggle_bufferline = false,
+        -- The project button, JetBrains style: pinned top-left, toggles the sidebar.
+        --
+        -- This deliberately replaces bufferline's `offsets` rather than using it.
+        -- A custom area is concatenated into the tabline verbatim, so a statusline
+        -- click label survives, whereas an offset sizes its text with `nvim_strwidth`
+        -- and would count the escapes as visible characters. But offsets also render
+        -- *before* custom areas, so keeping one would shove the button 41 columns
+        -- right the moment the sidebar opened -- a toggle that runs away from the
+        -- pointer. So the area does the offset's job too: pad the tabs clear of the
+        -- sidebar and draw the separator that lines up with the window split.
+        custom_areas = {
+          left = function()
+            local label = "  󰉋 Files "
+            local areas = {
+              {
+                text = "%@v:lua.NvimTabline.toggle_explorer@" .. label .. "%X",
+                fg = hl_fg("Directory"),
+              },
+            }
+            local width = sidebar_width()
+
+            if width then
+              local pad = math.max(width - tabline_width(label), 0)
+
+              -- `WinSeparator` rather than `BufferLineOffsetSeparator`: this character
+              -- continues the window split at that column, and the core group is
+              -- always defined, whereas bufferline's only exists once it has rendered.
+              areas[#areas + 1] = {
+                text = string.rep(" ", pad) .. "│",
+                fg = hl_fg("WinSeparator"),
+              }
+            end
+
+            return areas
+          end,
         },
       },
     },
