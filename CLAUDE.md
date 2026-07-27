@@ -294,21 +294,37 @@ which never fires without a UI. Verify with a real PTY (`script -q /dev/null nvi
 
 ## Testing installer changes
 
-`install.sh` cannot be meaningfully validated by reading it. Apple's `container` CLI is
-available on this machine:
+`install.sh` cannot be meaningfully validated by reading it.
+
+**Check which machine you are on first — the tooling and the limits differ.**
+
+| | macOS box (arm64) | Fedora box (x86_64) |
+| --- | --- | --- |
+| Runtime | Apple `container` CLI | `docker` and `podman` |
+| Disk | tight — check `df -h /`, delete images after | ample |
+| Exercises | `linux-arm64`, Debian/apt | `linux-x86_64`, **Fedora/dnf**, Debian/apt |
 
 ```sh
-# Bootstrap path (clones from GitHub), exactly as `curl ... | bash -s --` behaves:
-container run --rm -i docker.io/library/ubuntu:latest bash -s -- --check < install.sh
+# Bootstrap path (clones from GitHub), exactly as `curl ... | bash -s --` behaves.
+container run --rm -i docker.io/library/ubuntu:latest bash -s -- --check < install.sh   # macOS
+podman    run --rm -i docker.io/library/ubuntu:latest bash -s -- --check < install.sh   # Fedora
 
-# Same, with a copy of just the script mounted so local edits are exercised:
+# Same, with a copy of just the script mounted so local edits are exercised.
 mkdir -p /tmp/m && cp install.sh /tmp/m/
-container run --rm -v /tmp/m:/mnt docker.io/library/debian:latest \
-  bash /mnt/install.sh --yes --skip-font
+container run --rm -v /tmp/m:/mnt   docker.io/library/debian:latest bash /mnt/install.sh --yes --skip-font
+podman    run --rm -v /tmp/m:/mnt:Z docker.io/library/fedora:latest bash /mnt/install.sh --yes --skip-font
 ```
+
+**On Fedora the `:Z` suffix on the bind mount is not optional.** SELinux otherwise denies the
+container read access and the script dies claiming the file is missing, which looks like a
+mount-path typo rather than a label problem. `docker` on Fedora needs it too. Use `:z` instead
+if the same directory is mounted into more than one container at once.
 
 Mount only the script, never the whole repo: `is_config_repo()` would then be true for the
 mount point, and the run would exercise the symlink path instead of the clone path.
+
+Running as root inside the container is the intended path — `detect_platform` sets `SUDO=""`
+when `id -u` is 0, so no sudo is needed and none is installed in these base images.
 
 **Before reaching for a container, source the script.** The `BASH_SOURCE` guard at the bottom
 exists so the functions can be pulled into a test shell and driven one at a time — set `HOME` to
@@ -326,9 +342,9 @@ HOME="$T" bash -c 'source /abs/path/install.sh
 ```
 
 Reserve the container for what a fake `$HOME` cannot reach: the package-manager branches, and
-platform mappings that differ from this machine. Note the runtime is arm64-only, so a Linux run
-tests `linux-arm64` and leaves the x86_64 asset names unproven — resolve those with a
-`curl -o /dev/null -sIL -w '%{http_code}'` against the release URL instead.
+platform mappings that differ from the machine you are on. Where a container is still the wrong
+tool — a release asset name for an architecture you do not have — a
+`curl -o /dev/null -sIL -w '%{http_code}'` against the download URL settles it in a second.
 
 Caveats learned:
 
@@ -341,10 +357,105 @@ Caveats learned:
   the full `--yes` run does that. (It also prints an empty second "Configuration" section under
   bootstrap: `ensure_config_location` is skipped by the `$BOOTSTRAP ||` guard and
   `ensure_treesitter_cli` prints nothing in check mode. Cosmetic.)
-- Container images are large. This machine has run low on disk; check `df -h /` first and
-  `container image delete` what you pulled. An Ubuntu base is ~247MB reclaimed.
-- Apple's runtime is arm64-only, so x86_64 paths remain unexercised.
+- Container images are large. The **macOS** box has run low on disk; check `df -h /` first and
+  `container image delete` what you pulled. An Ubuntu base is ~247MB reclaimed. The Fedora box
+  has room, so this constraint does not apply there.
+- Apple's runtime is arm64-only, so **x86_64 paths are unexercised from macOS**. That is the
+  Fedora box's job.
 - A full run takes 10-20 minutes, mostly Mason. Run it in the background.
+
+## Handoff: what is still unverified
+
+Everything below is *known-unknown*, not suspected-broken. Recorded so the next session does
+not re-derive it, and does not assume it was covered.
+
+**The full `./install.sh --yes` end-to-end run has never been executed anywhere.** Every
+installer claim in this file comes from `--check`, from sourcing the functions, or from
+targeted container runs of individual functions. The macOS box could not afford it on disk. It
+is the single highest-value thing to run on Fedora, in the background, against
+`fedora:latest` **and** `debian:latest`.
+
+**The Fedora/dnf branch of `install.sh` has never been run at all.** Only apt and brew have.
+Specifically unknown there:
+
+- Whether `gh` is packaged (`dnf info gh`). It is on Debian latest — verified — so
+  `ensure_gh` took the package path there and `install_gh_from_release` was exercised only by
+  calling it directly. If Fedora also packages it, the release fallback stays untested on the
+  normal path and should be forced once by hand.
+- `ensure_optional` has `local delta_pkg="git-delta"` followed by
+  `[[ "$DISTRO" == "fedora" ]] && delta_pkg="git-delta"` — a branch that assigns the value it
+  already had. Confirm Fedora's real package name, then delete the dead line.
+- The Fedora branch adds `python3-pip` but, unlike Debian, no `python3-venv` — Fedora bundles
+  `venv` with `python3` rather than splitting it. That is believed correct and untested. If it
+  is ever wrong the failure is silent in exactly the documented way: Mason's `basedpyright` and
+  `ruff` fail to install and Python ends up with no language server. Confirm with
+  `python3 -c 'import venv'` inside `fedora:latest` before trusting it.
+
+**x86_64 release assets are URL-verified but never downloaded, extracted or run.** All four
+return `200`, so the *naming* is right; what is unproven is the extract-and-install step on
+that architecture:
+
+| Asset | Built by |
+| --- | --- |
+| `nvim-linux-x86_64.tar.gz` | `install_neovim_from_tarball` |
+| `lazygit_<ver>_Linux_x86_64.tar.gz` | `install_lazygit_from_release` |
+| `gh_<ver>_linux_amd64.tar.gz` | `install_gh_from_release` |
+
+Note `gh` is the odd one out and the easiest to get wrong: it wants Go's `amd64` where the
+others want `x86_64`, `macOS` where lazygit wants `Darwin`, and a `.zip` on macOS. The mapping
+lives in `install_gh_from_release` and was HEAD-checked for all four platform combinations.
+
+**The git UI (commit `3664098`) is verified, but not by a full install.** What *was* proven:
+a fresh `+Lazy! restore` into an empty `XDG_DATA_HOME` installs 38 plugins reconciling exactly
+against `lazy-lock.json`; Neogit, octo and git-conflict then work on that tree; and a fresh
+`--depth 1` clone of `main` contains all of it. What was **not**: that a real end-to-end
+`install.sh` run produces a working editor. Same background run as above covers it — after it
+finishes, open a Python file in the container and use the functional check under
+"Verifying changes", not just `:checkhealth`.
+
+**`wakatime-cli` is genuinely absent on the macOS box** (`~/.local/bin/wakatime-cli` does not
+exist), so `--check` reports it missing there. Unrelated to any recent work; do not "fix" it as
+part of something else.
+
+### Runbook for the Fedora box
+
+Start the long one first — it is 10-20 minutes, mostly Mason — then do the cheap checks while
+it runs. `--skip-font` because a container has no font consumer; drop it if testing the font
+step itself. No `-v` mount: this is the bootstrap path, which clones `main` from GitHub, so it
+tests exactly what a new machine gets. Push before running.
+
+```sh
+podman run --rm -i docker.io/library/fedora:latest bash -s -- --yes --skip-font < install.sh
+podman run --rm -i docker.io/library/debian:latest bash -s -- --yes --skip-font < install.sh
+```
+
+A run is a pass only if the closing Summary lists no failures **and** the editor then works.
+`:checkhealth` alone is not sufficient — see the note about `language.add` and coloured output
+below. Keep the container alive and run the functional check from "Verifying changes" against
+a real `.py` file: two LSP clients, treesitter active, inlay hints on.
+
+Then, individually, the things the bootstrap run will not isolate:
+
+```sh
+# Does Fedora package gh? Decides whether the release fallback is even reachable there.
+podman run --rm docker.io/library/fedora:latest bash -c 'dnf -q info gh >/dev/null 2>&1 && echo packaged || echo not-packaged'
+
+# Force the x86_64 release paths regardless of what is packaged. Mount the script (SELinux :Z).
+mkdir -p /tmp/m && cp install.sh /tmp/m/
+podman run --rm -v /tmp/m:/mnt:Z docker.io/library/fedora:latest bash -c '
+  dnf install -y -q curl tar gzip >/dev/null
+  source /mnt/install.sh
+  CHECK_ONLY=false; DRY_RUN=false
+  INSTALLED=(); MISSING=(); SKIPPED=(); WARNINGS=()
+  detect_platform && echo "platform: $OS/$DISTRO/$ARCH"
+  install_gh_from_release      && "$HOME/.local/bin/gh" --version
+  install_lazygit_from_release && "$HOME/.local/bin/lazygit" --version'
+```
+
+That last one is the real x86_64 gap: it downloads, extracts and *runs* the binaries, which the
+`200`-response HEAD checks above deliberately do not. `detect_platform` should print
+`linux/fedora/x86_64` — if it prints `arm64` you are on the wrong box and the run proves
+nothing new.
 
 ## Style of work expected here
 
