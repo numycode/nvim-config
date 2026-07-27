@@ -18,8 +18,10 @@ Also deliberately absent, by the owner's explicit decision: **DAP/debugging**, *
 
 **Neovim 0.12+.** Not 0.11 — that was wrong and cost real debugging time. `nvim-treesitter`'s
 `main` branch calls `vim.list.unique()`, which does not exist before 0.12; parser installation
-fails with `attempt to index field 'list' (a nil value)`. No distribution packages 0.12 yet,
-so `install.sh` installs the upstream tarball on Linux.
+fails with `attempt to index field 'list' (a nil value)`. **Fedora 44 now packages 0.12.4**, so
+the dnf path is taken there and `install_neovim_from_tarball` never runs; Debian latest still
+ships 0.10.4, so it falls back to the upstream tarball. Both were measured on 2026-07-27 — do
+not assume the tarball path is the only Linux path any more.
 
 The config also uses 0.11 APIs (`vim.lsp.config`, `vim.lsp.foldexpr`, `vim.hl.on_yank`), but
 treesitter is the binding constraint.
@@ -73,6 +75,20 @@ to legacy regex syntax, which looks similar.
 
 **`get_installed()` returns queries; `get_installed("parsers")` returns parsers.** The bare
 call returns `{"html_tags"}` and means nothing.
+
+**Never measure parser health by counting `get_installed("parsers")`.** It also reports parsers
+nvim-treesitter pulled in as *dependencies* — `xml` drags in `dtd` — so its length is not the
+size of the wanted set. This produced a false pass: a Fedora bootstrap run printed
+`parsers: 26/26 installed` against 26 wanted while `dtd` was present and **`vimdoc` was
+missing**, and the same code printed the equally meaningless `27/26` on Debian. `ensure()` now
+returns the count of *wanted* parsers plus the missing names, and `install.sh` puts them in the
+Summary's warnings. Compare sets, never lengths.
+
+**`handle:wait(timeout_ms)` from `nvim-treesitter.install()` returns before the compiles land.**
+Measured: it returned after **1007ms** against a 900,000ms budget, with `vimdoc` still compiling.
+Headless, the `+qa` immediately afterwards then kills the straggling compiles, which is the
+mechanism behind the missing `vimdoc` above. `ensure()` therefore follows the `wait` with a
+`vim.wait` that polls the wanted set until it is actually complete.
 
 **Wait for the right number of LSP clients.** Python attaches two (`basedpyright` and `ruff`)
 and JavaScript one. `ruff` is a Rust binary and attaches almost immediately; `basedpyright` is
@@ -364,83 +380,94 @@ Caveats learned:
   Fedora box's job.
 - A full run takes 10-20 minutes, mostly Mason. Run it in the background.
 
-## Handoff: what is still unverified
+## Handoff: what the installer has and has not proven
 
-Everything below is *known-unknown*, not suspected-broken. Recorded so the next session does
-not re-derive it, and does not assume it was covered.
+Measured on the Fedora x86_64 box on 2026-07-27 with podman 5.8.4. This replaces an earlier list
+of known-unknowns; anything not under "Still unverified" below is now a measured fact.
 
-**The full `./install.sh --yes` end-to-end run has never been executed anywhere.** Every
-installer claim in this file comes from `--check`, from sourcing the functions, or from
-targeted container runs of individual functions. The macOS box could not afford it on disk. It
-is the single highest-value thing to run on Fedora, in the background, against
-`fedora:latest` **and** `debian:latest`.
+**The full `./install.sh --yes --skip-font` bootstrap run passes on both Linux targets.** Run
+against `fedora:latest` and `debian:latest` through the stdin/bootstrap path (no mount, so both
+cloned `main` from GitHub — the thing a new machine actually gets). Both closing Summaries
+listed no failures, and both were then driven past `:checkhealth` with the functional check from
+"Verifying changes", on a real `.py` file:
 
-**The Fedora/dnf branch of `install.sh` has never been run at all.** Only apt and brew have.
-Specifically unknown there:
+| | fedora:latest | debian:latest |
+| --- | --- | --- |
+| platform line | `fedora (dnf, x86_64)` | `debian (apt, x86_64)` |
+| neovim | 0.12.4 **from dnf** | 0.12.4 upstream tarball (packaged 0.10.4 too old) |
+| treesitter parsers | 26/26 wanted | 26/26 wanted |
+| Mason packages | 17 | 17 |
+| LSP clients on a `.py` | `basedpyright` + `ruff` | `basedpyright` + `ruff` |
+| treesitter | active, 2 captures | active, 2 captures |
+| inlay hints | enabled, 4 returned | enabled, 4 returned |
 
-- Whether `gh` is packaged (`dnf info gh`). It is on Debian latest — verified — so
-  `ensure_gh` took the package path there and `install_gh_from_release` was exercised only by
-  calling it directly. If Fedora also packages it, the release fallback stays untested on the
-  normal path and should be forced once by hand.
-- `ensure_optional` has `local delta_pkg="git-delta"` followed by
-  `[[ "$DISTRO" == "fedora" ]] && delta_pkg="git-delta"` — a branch that assigns the value it
-  already had. Confirm Fedora's real package name, then delete the dead line.
-- The Fedora branch adds `python3-pip` but, unlike Debian, no `python3-venv` — Fedora bundles
-  `venv` with `python3` rather than splitting it. That is believed correct and untested. If it
-  is ever wrong the failure is silent in exactly the documented way: Mason's `basedpyright` and
-  `ruff` fail to install and Python ends up with no language server. Confirm with
-  `python3 -c 'import venv'` inside `fedora:latest` before trusting it.
+Inlay hints being *enabled* is the weak half of that row. The half that matters is
+`vim.lsp.inlay_hint.get()` returning real labels — `: int`, `: str`, `name=` — because that is
+what separates a working basedpyright from one that merely attached.
 
-**x86_64 release assets are URL-verified but never downloaded, extracted or run.** All four
-return `200`, so the *naming* is right; what is unproven is the extract-and-install step on
-that architecture:
+That first Fedora run is also where the parser-counting bug surfaced: it reported
+`parsers: 26/26 installed` while `vimdoc` was genuinely absent. See the two treesitter entries
+under "Things that will bite you". The table above is from the fixed code.
 
-| Asset | Built by |
+**The Fedora/dnf branch has now run.** Findings:
+
+- **`gh` is packaged on Fedora** (2.94.0-1.fc44), as it is on Debian. So `ensure_gh` takes the
+  package path on both Linux targets and `install_gh_from_release` is unreachable on the normal
+  path — it has to be forced by hand, which is what the x86_64 run below does.
+- **Fedora bundles `venv` with `python3`, and `python3-venv` is not a package at all**
+  (`dnf info python3-venv` finds nothing). Proven past `import venv`, which is the weak check:
+  `python3 -m venv` created a venv, `pip` inside it worked, and it installed `ruff` from PyPI —
+  the actual thing Mason does. The Fedora branch adding only `python3-pip` is correct.
+- **`git-delta` is Fedora's real package name** (0.19.1-3.fc44); plain `delta` does not exist
+  there. The dead `[[ "$DISTRO" == "fedora" ]] && delta_pkg="git-delta"` line is gone.
+- Note `python3` is **not** in the `fedora:latest` base image, so a bare
+  `podman run fedora python3 ...` probe fails with "command not found" and looks like a broken
+  interpreter rather than a missing package. Install `python3` first.
+
+**The x86_64 release assets are downloaded, extracted and executed** — not merely HEAD-checked.
+Forced in a `fedora:latest` container with `detect_platform` printing `linux/fedora/x86_64`:
+
+| Asset | Result |
 | --- | --- |
-| `nvim-linux-x86_64.tar.gz` | `install_neovim_from_tarball` |
-| `lazygit_<ver>_Linux_x86_64.tar.gz` | `install_lazygit_from_release` |
-| `gh_<ver>_linux_amd64.tar.gz` | `install_gh_from_release` |
+| `gh_2.96.0_linux_amd64.tar.gz` | `gh version 2.96.0` |
+| `lazygit_0.63.1_Linux_x86_64.tar.gz` | `version=0.63.1, os=linux, arch=amd64` |
+| `nvim-linux-x86_64.tar.gz` | `NVIM v0.12.4`, ELF 64-bit, runs Lua, `vim.list.unique` is a `function` |
 
-Note `gh` is the odd one out and the easiest to get wrong: it wants Go's `amd64` where the
-others want `x86_64`, `macOS` where lazygit wants `Darwin`, and a `.zip` on macOS. The mapping
-lives in `install_gh_from_release` and was HEAD-checked for all four platform combinations.
+### Still unverified
 
-**The git UI (commit `3664098`) is verified, but not by a full install.** What *was* proven:
-a fresh `+Lazy! restore` into an empty `XDG_DATA_HOME` installs 38 plugins reconciling exactly
-against `lazy-lock.json`; Neogit, octo and git-conflict then work on that tree; and a fresh
-`--depth 1` clone of `main` contains all of it. What was **not**: that a real end-to-end
-`install.sh` run produces a working editor. Same background run as above covers it — after it
-finishes, open a Python file in the container and use the functional check under
-"Verifying changes", not just `:checkhealth`.
+- **macOS/arm64, from this box.** `install_gh_from_release`'s `macOS` + `.zip` mapping and the
+  whole Homebrew branch are still only HEAD-checks and reading. That is the macOS box's job.
+- **The font step.** Every run here passed `--skip-font`.
+- **`ensure_hackatime_config`'s writing path.** Both runs hit the "no `HACKATIME_API_KEY`" skip
+  branch, so the branch that actually writes `~/.wakatime.cfg` is still exercised only by the
+  fake-`$HOME` sourcing trick, never by a full run.
+- **Anything behind `gh auth login`.** Both runs warn that gh is unauthenticated, so octo and
+  `<leader>go` are installed but never driven against GitHub.
 
-**`wakatime-cli` is genuinely absent on the macOS box** (`~/.local/bin/wakatime-cli` does not
-exist), so `--check` reports it missing there. Unrelated to any recent work; do not "fix" it as
-part of something else.
+### Re-running this verification
 
-### Runbook for the Fedora box
+Start the two long ones first — 10-20 minutes each, mostly Mason — then do the cheap checks
+while they run. Push before running: the bootstrap path clones `main` from GitHub, so unpushed
+local changes to anything but `install.sh` are not tested.
 
-Start the long one first — it is 10-20 minutes, mostly Mason — then do the cheap checks while
-it runs. `--skip-font` because a container has no font consumer; drop it if testing the font
-step itself. No `-v` mount: this is the bootstrap path, which clones `main` from GitHub, so it
-tests exactly what a new machine gets. Push before running.
+Drop `--rm` and name the containers. The functional check has to run *after* the installer
+exits, and `podman commit` turns the finished container into an image you can re-enter; with
+`--rm` the evidence is gone the moment the run ends.
 
 ```sh
-podman run --rm -i docker.io/library/fedora:latest bash -s -- --yes --skip-font < install.sh
-podman run --rm -i docker.io/library/debian:latest bash -s -- --yes --skip-font < install.sh
+podman run --name nvim-fedora -i docker.io/library/fedora:latest bash -s -- --yes --skip-font < install.sh
+podman run --name nvim-debian -i docker.io/library/debian:latest bash -s -- --yes --skip-font < install.sh
+podman commit nvim-fedora nvim-fedora-img     # then run the functional check against the image
 ```
 
-A run is a pass only if the closing Summary lists no failures **and** the editor then works.
-`:checkhealth` alone is not sufficient — see the note about `language.add` and coloured output
-below. Keep the container alive and run the functional check from "Verifying changes" against
-a real `.py` file: two LSP clients, treesitter active, inlay hints on.
+A run is a pass only if the Summary lists no failures **and** the editor then works. Parsers
+live in `~/.local/share/nvim/site/parser/`, and the honest completeness check is a set
+difference against `require("config.parsers").parsers`, not a count — see the treesitter entries
+in "Things that will bite you".
 
-Then, individually, the things the bootstrap run will not isolate:
+Then the things a bootstrap run will not isolate, because `gh` is packaged on both distros:
 
 ```sh
-# Does Fedora package gh? Decides whether the release fallback is even reachable there.
-podman run --rm docker.io/library/fedora:latest bash -c 'dnf -q info gh >/dev/null 2>&1 && echo packaged || echo not-packaged'
-
-# Force the x86_64 release paths regardless of what is packaged. Mount the script (SELinux :Z).
 mkdir -p /tmp/m && cp install.sh /tmp/m/
 podman run --rm -v /tmp/m:/mnt:Z docker.io/library/fedora:latest bash -c '
   dnf install -y -q curl tar gzip >/dev/null
@@ -449,13 +476,14 @@ podman run --rm -v /tmp/m:/mnt:Z docker.io/library/fedora:latest bash -c '
   INSTALLED=(); MISSING=(); SKIPPED=(); WARNINGS=()
   detect_platform && echo "platform: $OS/$DISTRO/$ARCH"
   install_gh_from_release      && "$HOME/.local/bin/gh" --version
-  install_lazygit_from_release && "$HOME/.local/bin/lazygit" --version'
+  install_lazygit_from_release && "$HOME/.local/bin/lazygit" --version
+  install_neovim_from_tarball  && /usr/local/bin/nvim --version | head -3'
 ```
 
-That last one is the real x86_64 gap: it downloads, extracts and *runs* the binaries, which the
-`200`-response HEAD checks above deliberately do not. `detect_platform` should print
-`linux/fedora/x86_64` — if it prints `arm64` you are on the wrong box and the run proves
-nothing new.
+`install_neovim_from_tarball` installs into `/opt/nvim` and symlinks `/usr/local/bin/nvim`; it
+does **not** put anything in `~/.local/bin`, so looking for it there reports "No such file or
+directory" and looks like a failed extract. `detect_platform` must print `linux/fedora/x86_64` —
+`arm64` means you are on the wrong box and the run proves nothing new.
 
 ## Style of work expected here
 

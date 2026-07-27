@@ -757,8 +757,9 @@ ensure_optional() {
   else
     $CHECK_ONLY && { MISSING+=("delta (optional)"); warn "delta is not installed (optional)"; }
     if ! $CHECK_ONLY; then
+      # git-delta everywhere, so there is nothing to branch on. Verified on
+      # Fedora 44, where `dnf info delta` finds nothing and git-delta is 0.19.1.
       local delta_pkg="git-delta"
-      [[ "$DISTRO" == "fedora" ]] && delta_pkg="git-delta"
       if pkg_available "$delta_pkg"; then
         pkg_install "$delta_pkg" && INSTALLED+=("delta")
       else
@@ -899,18 +900,36 @@ sync_neovim() {
   # instance; the call below drives it synchronously instead.
   export NVIM_PARSERS_MANAGED=1
 
+  # `installed` counts only the parsers config.parsers asks for -- never a bare
+  # get_installed() total, which also counts dependencies (`xml` pulls in `dtd`)
+  # and so once read 26/26 on Fedora while `vimdoc` was missing.
   info "Installing treesitter parsers"
-  nvim --headless -c 'lua
+  local parser_out
+  parser_out="$(nvim --headless -c 'lua
     local ok, res = pcall(function()
       return { require("config.parsers").ensure({ timeout_ms = 900000 }) }
     end)
     if not ok then
       print("parsers: FAILED " .. tostring(res))
     else
-      local installed, wanted, err = res[1], res[2], res[3]
-      print(("parsers: %d/%d installed%s"):format(installed, wanted, err and (" (" .. err .. ")") or ""))
+      local installed, wanted, err, missing = res[1], res[2], res[3], res[4] or {}
+      local detail = ""
+      if #missing > 0 then
+        detail = " (missing: " .. table.concat(missing, ", ") .. ")"
+      end
+      if err then
+        detail = detail .. " (" .. err .. ")"
+      end
+      print(("parsers: %d/%d installed%s"):format(installed, wanted, detail))
     end
-  ' +qa 2>&1 | grep -E '^parsers:' || true
+  ' +qa 2>&1 | grep -E '^parsers:' || true)"
+
+  if [[ -n "$parser_out" ]]; then
+    printf '%s\n' "$parser_out"
+  fi
+  if [[ "$parser_out" == *FAILED* || "$parser_out" == *"missing:"* ]]; then
+    WARNINGS+=("${parser_out#parsers: }")
+  fi
 
   # The LSP stack is lazy-loaded on BufReadPre so the dashboard stays fast,
   # which means a headless run with no file never loads it and Mason installs

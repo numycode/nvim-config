@@ -84,40 +84,57 @@ end
 
 --- Install any parser that is not already on disk.
 ---@param opts? { timeout_ms?: integer } when timeout_ms is set, block until done
----@return integer installed, integer wanted, string|nil error
+---@return integer installed, integer wanted, string|nil error, string[] missing
 function M.ensure(opts)
   opts = opts or {}
 
   local ok, nts = pcall(require, "nvim-treesitter")
   if not ok then
-    return 0, #M.parsers, "nvim-treesitter is not available"
+    return 0, #M.parsers, "nvim-treesitter is not available", vim.deepcopy(M.parsers)
   end
 
-  local function count() return #(nts.get_installed("parsers") or {}) end
-
-  local installed = {}
-  for _, name in ipairs(nts.get_installed("parsers") or {}) do
-    installed[name] = true
+  -- Count only the parsers this config asks for. get_installed() also reports
+  -- parsers nvim-treesitter pulled in as dependencies -- `xml` drags in `dtd` --
+  -- so a bare count of it can equal #M.parsers while a wanted parser is absent.
+  -- That is not hypothetical: a Fedora install reported "26/26 installed" with
+  -- `dtd` present and `vimdoc` missing, and a Debian one reported "27/26".
+  local function missing_parsers()
+    local installed = {}
+    for _, name in ipairs(nts.get_installed("parsers") or {}) do
+      installed[name] = true
+    end
+    return vim.tbl_filter(function(name) return not installed[name] end, M.parsers)
   end
 
-  local missing = vim.tbl_filter(function(name) return not installed[name] end, M.parsers)
+  local function report(err)
+    local missing = missing_parsers()
+    return #M.parsers - #missing, #M.parsers, err, missing
+  end
 
-  if #missing == 0 then
-    return count(), #M.parsers, nil
+  if #missing_parsers() == 0 then
+    return report(nil)
   end
 
   if not ensure_cli() then
-    return count(), #M.parsers, ("tree-sitter CLI not found; run `npm install` in %s"):format(vim.fn.stdpath("config"))
+    return report(("tree-sitter CLI not found; run `npm install` in %s"):format(vim.fn.stdpath("config")))
   end
 
   local done, err = pcall(function()
-    local handle = nts.install(missing)
-    if opts.timeout_ms and handle and handle.wait then
+    local handle = nts.install(missing_parsers())
+    if not opts.timeout_ms then
+      return
+    end
+
+    -- handle:wait() returns before the last compiles land: measured returning
+    -- after 1s against a 900s budget, and a headless `+qa` straight afterwards
+    -- kills the stragglers mid-compile. Poll the wanted set for what is left.
+    if handle and handle.wait then
       handle:wait(opts.timeout_ms)
     end
+    vim.wait(opts.timeout_ms, function() return #missing_parsers() == 0 end, 200)
   end)
 
-  return count(), #M.parsers, (not done) and tostring(err) or nil
+  return report((not done) and tostring(err) or nil)
 end
 
 return M
