@@ -63,6 +63,19 @@ return {
           },
         },
         lualine_x = {
+          -- Today's Hackatime total, refreshed from wakatime-cli at most once a
+          -- minute. The __wakatime_statusline tag is what the plugin looks for
+          -- before injecting its own copy of this component -- finding ours, it
+          -- leaves the section alone instead of calling lualine.setup() again at
+          -- runtime. `cond` reads package.loaded rather than requiring the module,
+          -- so the statusline never drags it in ahead of VeryLazy. A failed refresh
+          -- writes only to stderr, so the component simply empties.
+          {
+            function() return require("wakatime").statusline() end,
+            cond = function() return package.loaded.wakatime ~= nil end,
+            icon = "󱑆",
+            __wakatime_statusline = true,
+          },
           -- Active LSP clients for the current buffer.
           {
             function()

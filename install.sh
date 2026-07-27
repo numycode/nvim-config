@@ -532,6 +532,87 @@ ensure_uv() {
   INSTALLED+=("uv")
 }
 
+# ---------------------------------------------------- install: hackatime ----
+
+install_hackatime_cli_from_release() {
+  local tag os_name arch_name asset url tmp
+  tag="$(github_latest_tag wakatime/wakatime-cli)"
+  [[ -n "$tag" ]] || die "Could not determine the latest wakatime-cli release."
+
+  # This project names its assets after Go's GOOS/GOARCH, which is neither what
+  # detect_platform records nor what lazygit publishes.
+  case "$OS" in
+    macos) os_name="darwin" ;;
+    linux) os_name="linux" ;;
+  esac
+  case "$ARCH" in
+    x86_64) arch_name="amd64" ;;
+    arm64)  arch_name="arm64" ;;
+  esac
+
+  asset="wakatime-cli-${os_name}-${arch_name}.zip"
+  url="https://github.com/wakatime/wakatime-cli/releases/download/${tag}/${asset}"
+
+  info "Installing wakatime-cli ${tag} from ${asset}"
+  ensure_local_bin
+  tmp="$(mktemp -d)"
+  fetch "$url" "$tmp/wakatime-cli.zip"
+  run unzip -oq "$tmp/wakatime-cli.zip" -d "$tmp"
+  # The binary inside carries the same platform suffix as the archive.
+  run install -m 0755 "$tmp/wakatime-cli-${os_name}-${arch_name}" "$LOCAL_BIN/wakatime-cli"
+  rm -rf "$tmp"
+  INSTALLED+=("wakatime-cli ${tag} (upstream release)")
+}
+
+# Installing this ourselves keeps the plugin off its own download path, which
+# wants a python3 provider -- and options.lua disables every provider host.
+# Finding wakatime-cli on PATH also turns the plugin's autoupdate off, so the
+# version is ours to bump by re-running this script.
+ensure_hackatime_cli() {
+  have wakatime-cli && { ok "wakatime-cli"; return 0; }
+  MISSING+=("wakatime-cli")
+  $CHECK_ONLY && { warn "wakatime-cli is not installed"; return 0; }
+
+  install_hackatime_cli_from_release
+}
+
+# ~/.wakatime.cfg holds the API key and the server URL. It is hand-maintained, so
+# an existing file is never read, merged, backed up or rewritten -- we only ever
+# create one that is not there, and only when the key is in the environment.
+# Otherwise the user runs :WakaTimeApiKey, which writes it from inside Neovim.
+ensure_hackatime_config() {
+  local cfg="$HOME/.wakatime.cfg"
+
+  if [[ -f "$cfg" ]]; then
+    ok "hackatime config (existing, left alone)"
+    return 0
+  fi
+
+  local key="${HACKATIME_API_KEY:-${WAKATIME_API_KEY:-}}"
+  if [[ -z "$key" ]]; then
+    SKIPPED+=("hackatime config (no HACKATIME_API_KEY in the environment)")
+    warn "No ~/.wakatime.cfg and no HACKATIME_API_KEY set. Run :WakaTimeApiKey inside Neovim,
+      or re-run with HACKATIME_API_KEY=... to have it written for you."
+    return 0
+  fi
+
+  MISSING+=("hackatime config")
+  $CHECK_ONLY && return 0
+
+  local url="${HACKATIME_API_URL:-https://hackatime.hackclub.com/api/hackatime/v1}"
+  info "Writing $cfg"
+  if $DRY_RUN; then
+    printf '  %s$ write %s (api_url=%s, api_key from environment)%s\n' "$C_DIM" "$cfg" "$url" "$C_RESET"
+    return 0
+  fi
+
+  # Created empty at 0600 first: the key must never exist in a world-readable file,
+  # not even for the instant between creating it and chmod'ing it.
+  (umask 077 && : >"$cfg") || { warn "Could not create $cfg"; return 0; }
+  printf '[settings]\napi_url = %s\napi_key = %s\n' "$url" "$key" >>"$cfg"
+  INSTALLED+=("hackatime config ($cfg)")
+}
+
 # --------------------------------------------------------- install: font ----
 
 # Detect the font itself rather than the package that may have delivered it:
@@ -860,7 +941,7 @@ verify() {
   step "Verification"
   local failed=0
 
-  local -a required=(nvim git curl rg node npm python3 uv lazygit)
+  local -a required=(nvim git curl rg node npm python3 uv lazygit wakatime-cli)
   local cmd
   for cmd in "${required[@]}"; do
     if have "$cmd"; then
@@ -965,6 +1046,8 @@ main() {
   step "Tools"
   ensure_lazygit
   ensure_uv
+  ensure_hackatime_cli
+  ensure_hackatime_config
   ensure_optional
 
   step "Fonts"

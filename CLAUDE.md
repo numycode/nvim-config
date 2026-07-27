@@ -115,6 +115,39 @@ reach global functions, hence `_G.NvimTabline`.
 vim-wakatime probes `has('python3')`, and Neovim answered by spawning an interpreter — ~160ms
 on the first Python buffer.
 
+**`~/.wakatime.cfg` is hand-maintained and must never be written to.** It carries the API key
+and the Hackatime `api_url`. `install.sh` creates one *only* when the file is absent and a key
+is in the environment; an existing file is not read, merged, backed up or replaced. Inside
+Neovim the danger is `:WakaTimeApiKey`, `:WakaTimeStatusBar*`, `:WakaTimeDebug*` and
+`:WakaTimeScreenRedraw*` — every one of them rewrites the file through `set_ini_setting`. Pass
+settings to `require("wakatime").setup()` instead. The plugin's own `setup_config_file()` is
+safe: it writes only when `filereadable` is 0.
+
+**vim-wakatime calls `setup()` itself, before yours.** `plugin/wakatime.vim` runs
+`require('wakatime').setup()` with no options the moment it is sourced, and a second `setup()`
+early-returns on `state.initialized` after merging only what can still be applied — so
+init-time options (`cli_path`, `debug`) look accepted and do nothing. `hackatime.lua` claims
+`vim.g.loaded_wakatime` in `init` so that file finishes immediately and our call is the only one.
+
+**vim-wakatime injects its own lualine component at runtime.** `maybe_attach_lualine_status_bar`
+calls `lualine.get_config()`, inserts at `lualine_x[1]` and re-runs `lualine.setup()`. It skips
+all of that when a component already carries `__wakatime_statusline = true` — which is why
+`ui.lua` declares one. Verified: the tag survives `get_config()`, and the total renders once.
+Two of them means the tag was dropped, so check the rendered bar, not the config.
+
+**`wakatime-cli` on `PATH` disables the plugin's autoupdate.** `setup_cli` tries `cli_path` →
+`PATH` → `~/.wakatime/wakatime-cli` → Homebrew → self-download, and anything but the last turns
+autoupdate off. `install.sh` puts it in `~/.local/bin`, so the version is the installer's to
+bump. That is deliberate: the self-download path is the one that wanted a `python3` provider.
+
+**`--file-experts` and `--today-goal` return empty against Hackatime.** They are wakatime.com
+features. `--today` works. A failed `--today` writes only to stderr and returns nothing on
+stdout, so the statusline empties rather than displaying an error string — measured against a
+bad key and an unreachable host.
+
+**`lualine.statusline()` with no argument renders the *inactive* sections.** Pass `true` for the
+focused bar. Without it you get filename + location and conclude your component is missing.
+
 **`vim.g.python3_host_prog` is deliberately not set** by the venv detection. It names the
 interpreter hosting Neovim's `:python3` provider (which needs pynvim), not the project
 interpreter. The LSP path travels via `python.pythonPath`.
@@ -130,8 +163,11 @@ fail silently while everything else succeeds.
 
 - **Formatting**: `.stylua.toml`, 2-space indent, 120 columns,
   `collapse_simple_statement = "FunctionOnly"` so keymap tables stay readable. Run
-  `stylua init.lua lua/` before committing; format-on-save does it in-editor.
-- **Shell**: `install.sh` must stay `shellcheck -S style` clean.
+  `stylua init.lua lua/` before committing; format-on-save does it in-editor. **`stylua` is not
+  on `PATH`** — it comes from Mason, so the command is
+  `~/.local/share/nvim/mason/bin/stylua init.lua lua/` unless you installed it separately.
+- **Shell**: `install.sh` must stay `shellcheck -S style` clean. `shellcheck` is not installed
+  by anything here; `brew install shellcheck` (~70MB) or run it in a container.
 - **Keymaps**: plugin keymaps live with their plugin spec (`keys = {}`); only
   plugin-independent ones go in `lua/config/keymaps.lua`. Every mapping needs a `desc` —
   which-key is the discovery mechanism and the JetBrains-muscle-memory replacement.
@@ -176,7 +212,14 @@ command, not a missing terminal. Use `script -q /dev/null nvim --startuptime ...
 `--headless`. The two disagree in absolute terms: headless skips UI init and reports ~26ms
 where a PTY reports ~160ms, and neither matches the ~85ms figure above. So a number is only
 meaningful against a baseline taken *the same way* — `git stash`, measure, `git stash pop`,
-measure. Five runs each; the spread is a few ms.
+measure. Five runs each; the spread is a few ms. Report the difference against that spread: two
+medians 2ms apart, inside sets that each range over 7ms, is not a regression.
+
+Two things sabotage that one-liner in an agent's sandbox, both silently. Neovim may not be able
+to write the log **under `/tmp`** — you get no file and the same empty `tail` as the missing-TTY
+case, so write it into the session scratchpad instead. And `grep` here is **ugrep**, which reads
+the leading dashes of `--- NVIM STARTED ---` as its own options and errors out; use
+`grep -F -e 'NVIM STARTED'`.
 
 Anything clickable — tabline buttons, dropbar breadcrumbs — is testable with
 `nvim_input_mouse`, but only under a real PTY. `--headless` renders no tabline grid, so the
@@ -219,6 +262,26 @@ container run --rm -v /tmp/m:/mnt docker.io/library/debian:latest \
 
 Mount only the script, never the whole repo: `is_config_repo()` would then be true for the
 mount point, and the run would exercise the symlink path instead of the clone path.
+
+**Before reaching for a container, source the script.** The `BASH_SOURCE` guard at the bottom
+exists so the functions can be pulled into a test shell and driven one at a time — set `HOME` to
+a `mktemp -d` first and `LOCAL_BIN` follows it, since it is derived from `$HOME` at source time.
+That turns "does this touch a file it must not" into a checksum assertion that runs in a second,
+with no image pull and no 20-minute Mason wait:
+
+```sh
+T=$(mktemp -d)
+HOME="$T" bash -c 'source /abs/path/install.sh
+  CHECK_ONLY=false; DRY_RUN=false
+  INSTALLED=(); MISSING=(); SKIPPED=(); WARNINGS=()   # the accumulators are not set by sourcing
+  detect_platform
+  ensure_hackatime_config'
+```
+
+Reserve the container for what a fake `$HOME` cannot reach: the package-manager branches, and
+platform mappings that differ from this machine. Note the runtime is arm64-only, so a Linux run
+tests `linux-arm64` and leaves the x86_64 asset names unproven — resolve those with a
+`curl -o /dev/null -sIL -w '%{http_code}'` against the release URL instead.
 
 Caveats learned:
 

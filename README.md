@@ -32,6 +32,7 @@ what it sets up, and what to install by hand on an unsupported platform.
 | `python3` | basedpyright, ruff | preinstalled | `apt install python3` |
 | `uv` | `:UvSync`, venv detection | `brew install uv` | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | `lazygit` | git panel (`<leader>gg`) | `brew install lazygit` | see [lazygit install](https://github.com/jesseduffield/lazygit#installation) |
+| `wakatime-cli` | time tracking, statusline total | installed by `install.sh` to `~/.local/bin` | same |
 | A Nerd Font | icons throughout | `brew install --cask font-jetbrains-mono-nerd-font` | [nerdfonts.com](https://www.nerdfonts.com/) |
 
 ### Optional
@@ -103,6 +104,8 @@ versions are too old or missing:
   `/opt/nvim` with a symlink in `/usr/local/bin`.
 - **lazygit** — absent from Debian bookworm. Installed to `~/.local/bin`.
 - **uv** — via the official Astral installer.
+- **wakatime-cli** — not packaged anywhere. Installed to `~/.local/bin`; see
+  [Time tracking](#time-tracking).
 
 On Debian the `fd` binary is installed as `fdfind`; the script symlinks it to `~/.local/bin/fd`
 because the snacks picker looks for `fd`. If `~/.local/bin` is not on your `PATH`, the script
@@ -166,7 +169,7 @@ lua/plugins/
                           multicursor, refactoring, persistence
   git.lua                 gitsigns, diffview
   formatting.lua          conform, format on save
-  wakatime.lua            time tracking
+  hackatime.lua           time tracking
 ```
 
 ## Keymaps
@@ -251,6 +254,42 @@ This is the `super-tab` preset, matching JetBrains. Switch to `preset = "default
 | `:FormatDisable[!]` | Disable format on save (`!` = current buffer) |
 | `:FormatEnable` | Re-enable format on save |
 | `:ConformInfo` | Formatter status for the buffer |
+| `:WakaTimeToday` | Today's total as a notification |
+| `:WakaTimeApiKey` | Set the API key (**rewrites `~/.wakatime.cfg`**) |
+| `:WakaTimeCliLocation` | Which `wakatime-cli` binary is in use |
+
+## Time tracking
+
+Heartbeats go to a self-hosted [Hackatime](https://hackatime.hackclub.com) instance via
+`vim-wakatime`. Today's total sits in the statusline, left of the LSP client list:
+
+```
+ NORMAL   main  init.lua        󱑆 2h 54m   basedpyright, ruff   python   33%   20:1
+```
+
+It refreshes from `wakatime-cli --today` at most once a minute, and renders nothing at all
+until the first result arrives — or if the call fails, since the CLI writes errors only to
+stderr.
+
+Configuration lives in `~/.wakatime.cfg`, which is **hand-maintained — the installer never
+reads, merges or overwrites an existing one.** On a machine that has no such file yet:
+
+| Variable | Effect |
+| --- | --- |
+| `HACKATIME_API_KEY` | Key to write. `WAKATIME_API_KEY` is accepted as a fallback. |
+| `HACKATIME_API_URL` | Server, defaulting to `https://hackatime.hackclub.com/api/hackatime/v1` |
+
+```sh
+HACKATIME_API_KEY=... ./install.sh
+```
+
+With neither set the installer writes nothing and tells you to run `:WakaTimeApiKey` instead.
+Note that `:WakaTimeApiKey`, `:WakaTimeStatusBar*` and `:WakaTimeDebug*` all rewrite the cfg;
+the settings this config cares about are passed in Lua instead, from
+`lua/plugins/hackatime.lua`.
+
+`:WakaTimeFileExpert` and today-goal reporting are wakatime.com features and return nothing
+against a Hackatime backend.
 
 ## Notes
 
