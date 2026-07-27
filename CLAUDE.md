@@ -84,11 +84,28 @@ missing**, and the same code printed the equally meaningless `27/26` on Debian. 
 returns the count of *wanted* parsers plus the missing names, and `install.sh` puts them in the
 Summary's warnings. Compare sets, never lengths.
 
-**`handle:wait(timeout_ms)` from `nvim-treesitter.install()` returns before the compiles land.**
-Measured: it returned after **1007ms** against a 900,000ms budget, with `vimdoc` still compiling.
-Headless, the `+qa` immediately afterwards then kills the straggling compiles, which is the
-mechanism behind the missing `vimdoc` above. `ensure()` therefore follows the `wait` with a
-`vim.wait` that polls the wanted set until it is actually complete.
+**A 26-parser `nvim-treesitter.install()` batch silently drops one to three of them, and
+resolves its handle anyway.** Four clean bootstrap runs lost a *different* set each time:
+`vimdoc`; `dockerfile`+`sql`; `dockerfile`+`python` (on Debian — losing `python` matters rather
+a lot here); `css`+`git_config`+`html`. `handle:wait(timeout_ms)` is part of it — measured
+returning after **1007ms** against a 900,000ms budget with a parser still compiling, after which
+a headless `+qa` kills the straggler — but it is not the whole story, because the dropped
+parsers never arrive however long you wait.
+
+`install.sh` therefore calls `ensure()` **twice**. The second pass sees only the shortfall and is
+quick: measured 24/26 → 26/26 in **6.3s**, and 2 parsers installed cleanly in 6.1s when driven
+on their own. Anything still missing after that goes into the Summary's warnings.
+
+Two plausible-looking fixes were tried and are measured *worse* — do not reintroduce them:
+
+- **Polling the wanted set until it is complete** stalls for the entire 900s budget, because the
+  dropped parsers are not coming.
+- **A retry loop with stall detection** (reinstall the shortfall when the count stops shrinking)
+  measured **3/26** on a from-scratch batch, giving up after 186s: a 60s stall threshold cuts
+  into compiles that are still progressing, and re-entering `install()` mid-batch interferes with
+  the jobs already running.
+
+The upstream drop itself is unfixed and still not understood; the two-pass call papers over it.
 
 **Wait for the right number of LSP clients.** Python attaches two (`basedpyright` and `ruff`)
 and JavaScript one. `ruff` is a Rust binary and attaches almost immediately; `basedpyright` is
@@ -391,7 +408,11 @@ Caveats learned:
   has room, so this constraint does not apply there.
 - Apple's runtime is arm64-only, so **x86_64 paths are unexercised from macOS**. That is the
   Fedora box's job.
-- A full run takes 10-20 minutes, mostly Mason. Run it in the background.
+- A full run takes 10-20 minutes, mostly Mason. Run it in the background. Measured end to end on
+  the Fedora box: 17.8 min (fedora) and 19.9 min (debian).
+- Drop `--rm` and `--name` the container. The functional check has to run *after* the installer
+  exits, and `podman commit <name> <img>` turns the finished container into a re-enterable image;
+  with `--rm` the evidence is gone the moment the run ends.
 
 ## Handoff: what the installer has and has not proven
 
@@ -418,9 +439,17 @@ Inlay hints being *enabled* is the weak half of that row. The half that matters 
 `vim.lsp.inlay_hint.get()` returning real labels — `: int`, `: str`, `name=` — because that is
 what separates a working basedpyright from one that merely attached.
 
-That first Fedora run is also where the parser-counting bug surfaced: it reported
-`parsers: 26/26 installed` while `vimdoc` was genuinely absent. See the two treesitter entries
-under "Things that will bite you". The table above is from the fixed code.
+The table is from runs of the *fixed* code. Getting there took six bootstrap runs, because the
+first pair is what exposed the parser bugs: a Fedora run reported `parsers: 26/26 installed`
+with `vimdoc` genuinely absent, and every run after it lost a different set until `install.sh`
+started calling `ensure()` twice. Both treesitter entries under "Things that will bite you" are
+the result — read them before touching parser installation, especially the list of fixes that
+measured *worse*.
+
+The practical consequence for anyone verifying a run: the parser line is now trustworthy, so a
+Summary with no warnings really does mean all 26 landed. Confirm it independently anyway, with a
+set difference against `require("config.parsers").parsers` — `total=27` is the healthy number,
+26 wanted plus the `dtd` dependency.
 
 **The Fedora/dnf branch has now run.** Findings:
 

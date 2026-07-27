@@ -120,12 +120,13 @@ function M.ensure(opts)
   end
 
   -- Deliberately just the batch and its handle -- see the treesitter notes in
-  -- CLAUDE.md. nvim-treesitter drops one or two parsers out of a 26-parser
+  -- CLAUDE.md. nvim-treesitter drops one to three parsers out of a 26-parser
   -- batch and resolves the handle anyway, and neither polling the wanted set
-  -- nor reinstalling the shortfall fixed it: polling to completion stalls for
-  -- the whole budget, and a retry loop with stall detection measured *worse*,
-  -- 3/26, because it cuts into compiles that were still progressing. So report
-  -- the shortfall honestly and leave the installing to upstream.
+  -- nor reinstalling the shortfall fixed it here: polling to completion stalls
+  -- for the whole budget, and a retry loop with stall detection measured
+  -- *worse*, 3/26, because it cuts into compiles that were still progressing.
+  -- So report the shortfall honestly; install.sh calls ensure() twice, which is
+  -- what actually gets all 26 in place.
   local done, err = pcall(function()
     local handle = nts.install(missing_parsers())
     if opts.timeout_ms and handle and handle.wait then
