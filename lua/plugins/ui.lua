@@ -370,6 +370,13 @@ return {
     opts = {
       bar = {
         -- Keep the winbar out of special buffers.
+        --
+        -- `gitcommit` is excluded by name rather than left to the
+        -- `winbar ~= ""` test above: dropbar attaches on BufEnter and FileType
+        -- as well as BufWinEnter, and measured on this config it *did* claim
+        -- neogit's commit editor, rendering "󰉋 .git  COMMIT_EDITMSG". The
+        -- Commit button that lua/config/autocmds.lua puts there is worth more
+        -- than a breadcrumb for a path with no structure to break down.
         enable = function(buf, win, _)
           if
             not vim.api.nvim_buf_is_valid(buf)
@@ -377,6 +384,7 @@ return {
             or vim.fn.win_gettype(win) ~= ""
             or vim.wo[win].winbar ~= ""
             or vim.bo[buf].ft == "help"
+            or vim.bo[buf].ft == "gitcommit"
           then
             return false
           end

@@ -68,6 +68,33 @@ vim.api.nvim_create_autocmd("BufWritePre", {
   end,
 })
 
+vim.api.nvim_create_autocmd("BufWinEnter", {
+  group = augroup,
+  desc = "Give neogit's commit editor a Commit button and an honest q",
+  pattern = { "*/COMMIT_EDITMSG", "*/MERGE_MSG" },
+  callback = function(event)
+    -- Only neogit's editor, not a plain `git commit` run from a :terminal with
+    -- EDITOR=nvim. Neogit hardcodes ZZ/ZQ (editor/init.lua:216-231), so a
+    -- buffer-local ZZ is the discriminator. BufWinEnter is late enough to see
+    -- them: Buffer.create sets its mappings at lib/buffer.lua:794 and only opens
+    -- the window at ~806, which is what fires this event.
+    local has_zz = false
+
+    for _, map in ipairs(vim.api.nvim_buf_get_keymap(event.buf, "n")) do
+      if map.lhs == "ZZ" then
+        has_zz = true
+        break
+      end
+    end
+
+    if not has_zz then
+      return
+    end
+
+    require("config.git").dress_commit_editor(event.buf, vim.api.nvim_get_current_win())
+  end,
+})
+
 vim.api.nvim_create_autocmd({ "FocusGained", "TermClose", "TermLeave" }, {
   group = augroup,
   desc = "Reload files changed outside of Neovim",

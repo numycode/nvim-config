@@ -34,7 +34,9 @@ init.lua                leader keys, config.* requires, lazy.nvim bootstrap
 lua/config/
   options.lua           vim.opt, folding, diagnostics presentation, provider disabling
   keymaps.lua           plugin-independent keymaps only
-  autocmds.lua          yank highlight, cursor restore, LspAttach, mkdir-on-write
+  autocmds.lua          yank highlight, cursor restore, LspAttach, mkdir-on-write,
+                        dressing neogit's commit editor
+  git.lua               <leader>gc staged-gate + commit editor buttons + <leader>g? sheet
   lsp.lua               capabilities() + on_attach() (buffer-local LSP keymaps)
   servers.lua           LSP servers + settings          <- also read by install.sh
   parsers.lua           treesitter parsers + ensure()   <- also read by install.sh
@@ -190,6 +192,89 @@ for `do_commit`: calling it blocks the event loop and opens no editor, and no co
 which is the controlled comparison that rules out a test artifact. So `<leader>gc` goes through
 the popup on purpose. Do not "simplify" it back to `action()`.
 
+**Nor back to `a.void`.** The obvious next theory — that the missing piece is the coroutine
+context, since `neogit.action` runs the action from `dispatch_refresh`'s *callback* (no coroutine
+on the stack) while the popup wraps it in `a.void` (`popup/init.lua:376`), and every git call
+outside an async context silently degrades to a blocking spawn-and-wait
+(`runner.lua:145-171`) — is **wrong, and measured worse**. Calling
+`require("neogit.lib.async").void(function() require("neogit.popups.commit.actions").commit(stub) end)()`
+hangs Neovim outright: the probe wrote its first line and nothing after, the editor never opened,
+no commit was made, and the process had to be killed. The explanation is consistent; the fix is
+not. `config.git.open_commit_editor()` still runs `:Neogit commit`.
+
+**What *does* remove the extra keystroke is pressing `c` for the user.** The commit popup is a
+real buffer with a published filetype and name (`NeogitPopup` / `NeogitCommitPopup`,
+`lib/popup/init.lua:418-421`), so a one-shot `BufWinEnter` autocmd can feed `c` into it —
+scheduled, because the popup closes itself on `WinLeave` (`popup/init.lua:426`). That depends on
+two strings rather than on neogit's async internals. Measured: `<leader>gc` lands directly in the
+message box. The autocmd must be disarmed on a timer too, or a popup that never appears leaves a
+stray `c` waiting for the next buffer.
+
+**Neogit's commit editor `q` commits, and its prompt does not say so.** `q` is Close
+(`editor/init.lua:192-206`); on a modified buffer it asks `"Save changes?"` through
+`vim.fn.confirm(msg, "&Yes\n&No", 1)` — **default Yes** — and Yes makes the commit. Measured on
+this config before the fix: `q` then `<CR>` took a scratch repo from 1 commit to 2. `<leader>q`
+did *not* commit (1 → 1); it fails with E37 instead, because the buffer is modified. Both are now
+overridden buffer-locally by `config.git.cancel()`, a three-way confirm defaulting to *Keep
+editing*. All three branches verified: `C` → 2, `D` → 1, `<CR>` → 1.
+
+Note when driving this in a test: **`nvim_input("<C-c>…")` cannot submit** — CTRL-C clears the
+typeahead, so the second `<C-c>` never arrives and the run looks like "submit is broken". Use
+`nvim_feedkeys(vim.keycode(...), "m", false)`. And `vim.fn.confirm` answers to the **accelerator
+letter**, not a digit: feeding `1<CR>` selects nothing and the prompt sits there.
+
+**Two submit keys are bound, and the editor's own help block names them at random.** Neogit
+resolves a mapping table's key through `util.tbl_wrap` (`lib/buffer.lua:794`), so
+`commit_editor = { ["<c-s>"] = "Submit" }` adds `<C-s>` *alongside* `<c-c><c-c>` — both verified
+to commit. But the injected `# Commands:` block prints `mapping[name][1]`
+(`editor/init.lua:110-113`), and that list's order is `pairs()` order over a merged table:
+measured across 5 headless runs it printed `<c-s>` twice and `<c-c><c-c>` three times. The `#`
+block is therefore not a place to advertise anything. The winbar is.
+
+**Winbar click labels work.** `%@v:lua.Fn@…%X` in `vim.wo[win][0].winbar` is clickable, not just
+in the tabline: `nvim_input_mouse("left", "press", "", 0, row, col)` at the button's column
+committed, with `row` from `nvim_win_get_position(win)` (measured `{1, 0}` — row 0 is bufferline's
+tabline). `nvim_eval_statusline(wb, { winid = win, use_winbar = true })` reports the resolved
+`.str` and a correct `.width` (96 for the commit bar), which is how to prove one is present
+without a screenshot.
+
+**A winbar truncates from the *left* unless you place `%<`.** The commit bar rendered at 80
+columns as `<ss Ctrl-S   ✕ Cancel…` — it dropped the ✓ Commit button and kept the trailing
+prose, which is exactly backwards. `%<` before the prose fixes it: measured at 238/100/80/60/40
+columns, both buttons survive to 60 and ✓ Commit survives to 40.
+
+**`<C-s>` survives the terminal — measured, not assumed.** This was carried as an open risk on
+the grounds that `nvim_feedkeys` injects *inside* Neovim, downstream of the terminal, and so
+cannot rule out iTerm2 eating CTRL-S as XOFF. Settle it by writing the raw byte down a real pty
+instead: `{ sleep 6; printf ' gc'; sleep 10; printf 'SUBJECT'; sleep 2; printf '\023'; } |
+script -q /dev/null nvim`. Measured 1 → 2 commits from **normal** mode and 1 → 2 from **insert**
+mode, subject clean. `stty -a` on the live tty shows `-ixon`, so Neovim's TUI does clear flow
+control. Note the editor opens *already in insert mode*, so a leading `i` in a driver script is
+typed as literal text and ends up in the subject line.
+
+**Spell keys out in prose — `<C-s>` is not a hint, it is a cipher.** Measured on the owner: the
+button bar rendered correctly at width 71, in a 238-column window, with `mouse=a` and `<C-s>`
+bound in both normal and insert mode, and the reported experience was still *"I typed the
+message but I can't figure out how to commit"* — from inside that editor. Reading the winbar
+over RPC is what proved the affordance was present and the notation was the failure. The bar now
+says `✓ Commit — press Ctrl-S`. Vim notation belongs in `desc` strings which-key renders beside
+the literal keys, not in prose aimed at someone who does not already know the notation.
+
+**A running Neovim can be interrogated over its socket, and this is the fastest way to tell
+"broken" from "not noticed".** Sockets live under
+`$TMPDIR/nvim.$USER/*/nvim.<pid>.0`; `nvim --server <sock> --remote-expr 'luaeval("dofile(...)")'`
+runs a read-only probe in the live session and returns its string. That is how the winbar
+contents, the resolved keymaps and `mode=i` above were obtained from the owner's actual editor
+rather than reproduced in a harness. Beware `nvim_buf_get_keymap` returns `lhs` in **readable**
+form (`<C-S>`), not as raw bytes — filtering for `"\19"` finds nothing and looks exactly like an
+unbound key.
+
+**dropbar claims `gitcommit` buffers unless told not to.** The commit editor is `buftype = ""`
+with a real filename, so dropbar's `enable` passed it and set
+`winbar=%{%v:lua.dropbar()%}`, rendering `󰉋 .git  COMMIT_EDITMSG`. The `winbar ~= ""` test in that
+`enable` is not enough to rely on — dropbar also attaches on `BufEnter` and `FileType`, so the
+race is not one to win by registration order. `ui.lua` excludes the filetype by name instead.
+
 **Remote provider hosts are disabled** (`python3`, `perl`, `ruby`, `node`) in `options.lua`.
 vim-wakatime probes `has('python3')`, and Neovim answered by spawning an interpreter — ~160ms
 on the first Python buffer.
@@ -264,7 +349,7 @@ because their output fits the pipe buffer, so nothing blocks and no SIGPIPE is r
   plugin-independent ones go in `lua/config/keymaps.lua`. Every mapping needs a `desc` —
   which-key is the discovery mechanism and the JetBrains-muscle-memory replacement.
 - **Leader groups**: `f` find, `s` search, `c` code, `g` git (`gh` hunks, `go` github,
-  `gx` conflicts), `x` diagnostics,
+  `gx` conflicts, `g?` the plain-English walkthrough), `x` diagnostics,
   `u` UI toggles, `b` buffer, `S` session, `t` terminal, `m` multicursor, `r` refactor.
 - **Lockfile**: `lazy-lock.json` is committed. `install.sh` runs `:Lazy restore`, never
   `sync` — `sync` updates everything and rewrites the lockfile.

@@ -140,6 +140,21 @@ return {
         show_staged_diff = true,
         staged_diff_split_kind = "split",
       },
+      -- <C-s> as a *second* Submit key, in both modes. Neogit binds a mapping
+      -- table's key through util.tbl_wrap (lib/buffer.lua:794), so a list of
+      -- keys per action is supported and <c-c><c-c> survives untouched.
+      --
+      -- <C-s> rather than VSCode's <C-Enter>: iTerm2 without the kitty keyboard
+      -- protocol cannot tell <C-CR> from <CR>, and this is an iTerm2 config.
+      --
+      -- The injected "# Commands:" block will not necessarily mention it --
+      -- editor/init.lua:110-113 prints mapping[name][1], and that list's order
+      -- is pairs() order over the merged config table. Which is why the winbar
+      -- in config/autocmds.lua carries the hint that anyone actually reads.
+      mappings = {
+        commit_editor = { ["<c-s>"] = "Submit" },
+        commit_editor_I = { ["<c-s>"] = "Submit" },
+      },
       integrations = {
         -- `d` on a file reuses the diffview configured above, with
         -- enhanced_diff_hl and the diff3_mixed merge layout. <leader>gd/gf/gF
@@ -170,7 +185,16 @@ return {
     -- thing; the panel = full power.
     keys = {
       { "<leader>gg", "<cmd>Neogit<CR>", desc = "Git panel: stage, commit, push" },
-      { "<leader>gc", "<cmd>Neogit commit<CR>", desc = "Commit staged changes (then c)" },
+      {
+        "<leader>gc",
+        function() require("config.git").commit() end,
+        desc = "Commit -- type a message, then Ctrl-S",
+      },
+      {
+        "<leader>g?",
+        function() require("config.git").cheatsheet() end,
+        desc = "How do I commit? (plain-English walkthrough)",
+      },
       -- p pulls and P pushes, matching the status buffer's own `p`/`P` (and
       -- magit's, and therefore Neogit's documentation). Binding <leader>gp to
       -- push would read better in isolation but would mean the same letter did
