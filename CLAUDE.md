@@ -100,6 +100,11 @@ explorer sidebar: it would be shoved 41 columns right the moment the sidebar ope
 under the pointer that just clicked it. The custom area does the offset's job instead — button,
 padding to the sidebar width, then a `│` on the split column.
 
+**`<leader>e` cannot close the explorer from inside it.** The mapping and the tabline button
+share `_G.NvimTabline.toggle_explorer`, but once the sidebar has focus the picker's input is in
+insert mode and swallows the keys — `<Space>e` types a space there. Toggle from the editor
+window, use `q` inside the sidebar, or click the button, which works from anywhere.
+
 **Only `custom_areas` can hold a clickable label.** Their text is concatenated into the tabline
 verbatim and measured with `nvim_eval_statusline`, so `%@v:lua.Fn@…%X` survives and is sized
 correctly. An `offsets` entry cannot: `get_section_text` measures with `nvim_strwidth`, which
@@ -165,6 +170,34 @@ Treat a regression past ~120ms bare as a bug, usually something loading eagerly:
 nvim --startuptime /tmp/st.log -c 'qa' && tail -1 /tmp/st.log
 ```
 
+`--startuptime` needs a TTY. Run from a non-interactive shell (an agent's tool call, a script)
+it writes no log at all and the `tail` silently reports nothing — which looks like a broken
+command, not a missing terminal. Use `script -q /dev/null nvim --startuptime ...` or
+`--headless`. The two disagree in absolute terms: headless skips UI init and reports ~26ms
+where a PTY reports ~160ms, and neither matches the ~85ms figure above. So a number is only
+meaningful against a baseline taken *the same way* — `git stash`, measure, `git stash pop`,
+measure. Five runs each; the spread is a few ms.
+
+Anything clickable — tabline buttons, dropbar breadcrumbs — is testable with
+`nvim_input_mouse`, but only under a real PTY. `--headless` renders no tabline grid, so the
+coordinates hit nothing and the click appears to do nothing:
+
+```sh
+script -q /dev/null nvim some.py -c 'lua
+  vim.defer_fn(function()
+    vim.api.nvim_input_mouse("left", "press", "", 0, 0, 3)   -- row 0 = tabline
+    vim.defer_fn(function()
+      vim.fn.writefile({ tostring(#Snacks.picker.get({ source = "explorer" })) }, "/tmp/n.txt")
+      vim.cmd("qa!")
+    end, 800)
+  end, 3000)
+' >/dev/null 2>&1; cat /tmp/n.txt
+```
+
+To read the tabline itself, `nvim_eval_statusline(_G.nvim_bufferline(), { use_tabline = true })`
+returns both the visible `.str` (escapes resolved) and its `.width` — that is how to prove a
+click label is present without a screenshot, and where a column lands.
+
 `:checkhealth` should be clean. Ignore `snacks.image` complaints about kitty/magick/mmdc, and
 the `vim.ui.input`/`vim.ui.select` errors under `--headless` — snacks wires those on `UIEnter`,
 which never fires without a UI. Verify with a real PTY (`script -q /dev/null nvim ...`).
@@ -192,8 +225,14 @@ Caveats learned:
 - The installer **clones the config from GitHub**, so unpushed local changes to anything other
   than `install.sh` are not tested. Push first, or the container silently runs an old config
   against a new script — which looks exactly like a code bug.
+- `--check` tests the installer, **not the config**. It changes nothing, which means it never
+  clones the repo and never starts Neovim — it exercises platform detection and the missing-
+  package list, and finishes in ~15s. It cannot tell you whether a config change works. Only
+  the full `--yes` run does that. (It also prints an empty second "Configuration" section under
+  bootstrap: `ensure_config_location` is skipped by the `$BOOTSTRAP ||` guard and
+  `ensure_treesitter_cli` prints nothing in check mode. Cosmetic.)
 - Container images are large. This machine has run low on disk; check `df -h /` first and
-  `container image delete` what you pulled.
+  `container image delete` what you pulled. An Ubuntu base is ~247MB reclaimed.
 - Apple's runtime is arm64-only, so x86_64 paths remain unexercised.
 - A full run takes 10-20 minutes, mostly Mason. Run it in the background.
 
