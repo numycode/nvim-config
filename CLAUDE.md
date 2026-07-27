@@ -111,6 +111,52 @@ correctly. An `offsets` entry cannot: `get_section_text` measures with `nvim_str
 counts the `%` escapes as visible characters and corrupts the layout. Click labels also only
 reach global functions, hence `_G.NvimTabline`.
 
+**git-conflict's `:GitConflictChoose*` and `:GitConflict{Next,Prev}Conflict` commands are
+broken upstream.** `set_commands()` creates them with a `<Plug>` *string* as the body
+(`git-conflict.lua:503-511`), and Vim executes a string body as an Ex command line, so every
+one of them fails with `E492: Not an editor command: <80><fd>S(git-conflict-ours)`. Map
+`<Plug>(git-conflict-ours|theirs|both|none|next-conflict|prev-conflict)` directly, with
+`remap = true`. Only `:GitConflictListQf` and `:GitConflictRefresh` take function bodies and
+actually work.
+
+**git-conflict's `disable_diagnostics` must stay `false` on Neovim 0.12.** It is implemented
+with `vim.diagnostic.disable()` (`git-conflict.lua:655`), which 0.12 removed — the symbol is
+`nil`, so enabling the option throws inside the plugin's own `GitConflictDetected` handler.
+`git.lua` does the same job from its own autocmd with `vim.diagnostic.enable(false, {bufnr})`.
+
+**git-conflict detection runs from a decoration provider, so `--headless` never fires it.**
+`on_win` → `process(bufnr)` only runs when a window is actually drawn. Headless, the
+`GitConflictDetected` event never fires: no highlights, no buffer-local maps, no diagnostic
+change — while `:GitConflictListQf` still works, because it shells out to git independently.
+That combination looks exactly like "my autocmd is broken". Test conflicts under
+`script -q /dev/null`. The event also carries **no payload** — `nvim_exec_autocmds("User",
+{pattern = ...})` and nothing else — so take the buffer from `nvim_get_current_buf()`.
+
+**A lualine component runs on every redraw — including its `cond`.** A synchronous
+`vim.fn.system` there is not a micro-optimisation question: measured on this machine, one
+`git rev-list --left-right --count @{upstream}...HEAD` costs **~11,000µs**, against ~10µs to
+render the entire bare statusline 1000 times from cache. So the `gitbar` table in `ui.lua`
+holds *both* the ahead/behind string and the `in_repo` flag that gates the Git button, and
+both components only read it; the two `vim.system` calls happen on
+`FocusGained`/`BufWritePost`/`DirChanged`/`User Neogit*`. Note `in_repo` needs its own
+`git rev-parse --is-inside-work-tree` — `rev-list` also fails inside a good repo whose branch
+has no upstream, so reusing it would hide the button in any repo you have not pushed yet.
+
+Prove the render path by shadowing `vim.system`, rendering 1000 times and asserting the spawn
+counter is still `0` — not by eyeballing latency. And A/B any component you add: bare-nvim
+render timings here range over 5-10µs run to run, so a single pair of numbers a few µs apart
+proves nothing. Measure with a file open only if you compare against a file-open baseline —
+the wakatime, LSP and devicons components dominate that number (~130µs) and will swamp yours.
+
+**`neogit.action("commit", "commit")` does not work.** The documented
+`neogit.action(popup, action)` API synthesises a stub popup (`close`, `state.env`,
+`get_arguments`), and that is enough for `push`/`to_pushremote` and `pull`/`from_pushremote` --
+both verified end to end here by watching the remote and local SHAs move. It is **not** enough
+for `do_commit`: calling it blocks the event loop and opens no editor, and no commit happens.
+`:Neogit commit` followed by `c` opens `gitcommit` + `NeogitDiffView` in the identical harness,
+which is the controlled comparison that rules out a test artifact. So `<leader>gc` goes through
+the popup on purpose. Do not "simplify" it back to `action()`.
+
 **Remote provider hosts are disabled** (`python3`, `perl`, `ruby`, `node`) in `options.lua`.
 vim-wakatime probes `has('python3')`, and Neovim answered by spawning an interpreter — ~160ms
 on the first Python buffer.
@@ -171,7 +217,8 @@ fail silently while everything else succeeds.
 - **Keymaps**: plugin keymaps live with their plugin spec (`keys = {}`); only
   plugin-independent ones go in `lua/config/keymaps.lua`. Every mapping needs a `desc` —
   which-key is the discovery mechanism and the JetBrains-muscle-memory replacement.
-- **Leader groups**: `f` find, `s` search, `c` code, `g` git (`gh` hunks), `x` diagnostics,
+- **Leader groups**: `f` find, `s` search, `c` code, `g` git (`gh` hunks, `go` github,
+  `gx` conflicts), `x` diagnostics,
   `u` UI toggles, `b` buffer, `S` session, `t` terminal, `m` multicursor, `r` refactor.
 - **Lockfile**: `lazy-lock.json` is committed. `install.sh` runs `:Lazy restore`, never
   `sync` — `sync` updates everything and rewrites the lockfile.

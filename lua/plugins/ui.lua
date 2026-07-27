@@ -25,6 +25,106 @@ end
 -- bufferline sizes custom areas (bufferline/custom_area.lua), so the two agree.
 local function tabline_width(text) return vim.api.nvim_eval_statusline(text, { use_tabline = true }).width end
 
+-- State behind the statusline's git widgets: the Neogit button and the JetBrains
+-- ↑2 ↓1 divergence counter.
+--
+-- lualine renders on every redraw, many times a second while scrolling, so the
+-- component functions must do no work at all: they read these two cached fields
+-- and nothing else. A synchronous `vim.fn.system("git rev-list ...")` in that
+-- position costs ~11ms of blocked UI per keystroke, measured -- against 7.3us to
+-- render the whole bar 1000 times from cache.
+local gitbar = { text = "", ahead = 0, behind = 0, in_repo = false, pending = false, checked = 0 }
+
+local GITBAR_THROTTLE_MS = 5000
+
+local function gitbar_refresh(force)
+  local now = vim.uv.now()
+
+  if gitbar.pending or (not force and now - gitbar.checked < GITBAR_THROTTLE_MS) then
+    return
+  end
+
+  gitbar.pending, gitbar.checked = true, now
+
+  local cwd = vim.uv.cwd()
+
+  local function publish(field, value)
+    -- These callbacks run in a fast event context: assigning to a Lua table is
+    -- legal, calling into the API is not, so the redraw is scheduled.
+    if gitbar[field] ~= value then
+      gitbar[field] = value
+      vim.schedule(function() vim.cmd.redrawstatus() end)
+    end
+  end
+
+  -- Gates the button. `rev-list` below cannot stand in for this: it also fails
+  -- inside a perfectly good repo whose branch has no upstream, so a repo you
+  -- have not pushed yet would lose its button.
+  vim.system(
+    { "git", "rev-parse", "--is-inside-work-tree" },
+    { cwd = cwd, text = true },
+    function(out) publish("in_repo", out.code == 0 and vim.trim(tostring(out.stdout or "")) == "true") end
+  )
+
+  -- Left of the `...` is upstream-only (behind), right is HEAD-only (ahead).
+  -- Exits non-zero outside a repo and on a branch with no upstream; both mean
+  -- "nothing to show", which is what an empty string renders as.
+  vim.system(
+    { "git", "rev-list", "--left-right", "--count", "@{upstream}...HEAD" },
+    { cwd = cwd, text = true },
+    function(out)
+      local behind, ahead = tostring(out.stdout or ""):match("(%d+)%s+(%d+)")
+      local parts = {}
+
+      if out.code ~= 0 or not ahead then
+        behind, ahead = "0", "0"
+      end
+
+      if ahead ~= "0" then
+        parts[#parts + 1] = "↑" .. ahead
+      end
+      if behind ~= "0" then
+        parts[#parts + 1] = "↓" .. behind
+      end
+
+      gitbar.pending = false
+      -- Kept as numbers too: the click handler needs to know which way the
+      -- branch has moved, not just how it reads.
+      gitbar.ahead, gitbar.behind = tonumber(ahead), tonumber(behind)
+      publish("text", table.concat(parts, " "))
+    end
+  )
+end
+
+-- No polling timer: nothing moves this state without one of these firing, and a
+-- timer would keep waking a backgrounded editor to shell out to git.
+local function gitbar_watch()
+  local group = vim.api.nvim_create_augroup("lualine-gitbar", { clear = true })
+
+  vim.api.nvim_create_autocmd({ "FocusGained", "BufWritePost" }, {
+    group = group,
+    callback = function() gitbar_refresh(false) end,
+  })
+
+  -- Forced: a new cwd is a different repository (or none), so the button has to
+  -- appear or disappear now rather than up to a throttle window later.
+  vim.api.nvim_create_autocmd("DirChanged", {
+    group = group,
+    callback = function() gitbar_refresh(true) end,
+  })
+
+  -- A glob rather than the individual names: Neogit emits a family of these
+  -- (NeogitPushComplete, NeogitCommitComplete, NeogitBranchCheckout, ...) and
+  -- every one of them can move the counts.
+  vim.api.nvim_create_autocmd("User", {
+    group = group,
+    pattern = "Neogit*",
+    callback = function() gitbar_refresh(true) end,
+  })
+
+  gitbar_refresh(true)
+end
+
 return {
   {
     "nvim-tree/nvim-web-devicons",
@@ -49,7 +149,50 @@ return {
       sections = {
         lualine_a = { "mode" },
         lualine_b = {
-          "branch",
+          -- Opens the Neogit status buffer -- the same thing <leader>gg does, as
+          -- a mouse target, so the git UI is reachable without knowing the
+          -- keymap. The statusline counterpart to the tabline's 󰉋 Files button,
+          -- and nf-md-git to that button's nf-md-folder: both live in the
+          -- U+F0000 material-design block this config draws its icons from.
+          --
+          -- Hidden outside a git repo, where clicking it could only ever fail.
+          -- `cond` is a plain boolean read of the cache; see `gitbar`.
+          {
+            function() return "󰊢" end,
+            cond = function() return gitbar.in_repo end,
+            on_click = function() vim.cmd("Neogit") end,
+          },
+          {
+            "branch",
+            -- Clickable, like the branch widget in the JetBrains status bar.
+            -- lualine wraps the component in a `%<n>@...@` click label, which
+            -- only resolves because `mouse = "a"` is set in options.lua.
+            on_click = function() Snacks.picker.git_branches() end,
+          },
+          -- Divergence from upstream. Both `cond` and the body are pure reads of
+          -- the cache above; the git call happens on the autocmds in
+          -- gitbar_watch(), never here. See the comment on `gitbar`.
+          --
+          -- Clicking does what the arrow is telling you: ↑ means commits are
+          -- sitting here unsent, ↓ means commits are waiting to come down. Both
+          -- at once is a genuine fork in the road -- pushing would be rejected
+          -- and pulling may conflict -- so that one opens the panel and lets you
+          -- look before acting.
+          {
+            function() return gitbar.text end,
+            cond = function() return gitbar.text ~= "" end,
+            on_click = function()
+              local neogit = require("neogit")
+
+              if gitbar.ahead > 0 and gitbar.behind > 0 then
+                vim.cmd("Neogit")
+              elseif gitbar.ahead > 0 then
+                neogit.action("push", "to_pushremote")()
+              else
+                neogit.action("pull", "from_pushremote")()
+              end
+            end,
+          },
           {
             "diff",
             symbols = { added = " ", modified = " ", removed = " " },
@@ -98,6 +241,14 @@ return {
       },
       extensions = { "lazy", "man", "quickfix" },
     },
+    config = function(_, opts)
+      -- Byte-for-byte what lazy's implicit config does, so the vim-wakatime
+      -- component interplay is unaffected -- the watchers are the only addition,
+      -- and they are registered here rather than in `init` so a bare `nvim`
+      -- pays nothing for them: lualine is VeryLazy, and so is this.
+      require("lualine").setup(opts)
+      gitbar_watch()
+    end,
   },
 
   -- Editor tabs across the top, with a JetBrains-style project button at the left.
@@ -273,7 +424,9 @@ return {
         { "<leader>c", group = "code" },
         { "<leader>f", group = "find" },
         { "<leader>g", group = "git" },
-        { "<leader>gh", group = "hunk" },
+        { "<leader>gh", group = "changes in this file" },
+        { "<leader>go", group = "github" },
+        { "<leader>gx", group = "conflict" },
         { "<leader>m", group = "multicursor" },
         { "<leader>r", group = "refactor" },
         { "<leader>s", group = "search" },

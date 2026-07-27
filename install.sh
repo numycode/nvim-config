@@ -116,7 +116,7 @@ Options:
   --dry-run         Print the commands that would run, but do not run them.
   -y, --yes         Do not prompt for confirmation.
   --skip-font       Do not install the Nerd Font.
-  --skip-optional   Do not install optional tools (gh, delta).
+  --skip-optional   Do not install optional tools (delta).
   --no-sync         Do not run the headless Neovim plugin/LSP sync at the end.
   -h, --help        Show this help.
 
@@ -129,6 +129,7 @@ Tools installed from upstream rather than the system package manager, because
 distro versions are frequently too old or absent:
   neovim   when the packaged version is older than 0.12 (no distro packages it yet)
   lazygit  when not packaged (absent from Debian bookworm)
+  gh       when not packaged (absent from Debian bookworm)
   uv       always, via the official Astral installer
 EOF
 }
@@ -510,6 +511,72 @@ ensure_lazygit() {
 
 # ----------------------------------------------------------- install: uv ----
 
+install_gh_from_release() {
+  local tag version os_name arch_name asset url tmp
+  tag="$(github_latest_tag cli/cli)"
+  [[ -n "$tag" ]] || die "Could not determine the latest gh release."
+  version="${tag#v}"
+
+  # gh names its assets differently from lazygit: "macOS" not "Darwin", Go's
+  # "amd64" not "x86_64", and a .zip rather than a .tar.gz on macOS. All four
+  # combinations were HEAD-checked against the release URL before being written
+  # here -- the naming is not guessable from the lazygit function above.
+  case "$OS" in
+    macos) os_name="macOS" ;;
+    linux) os_name="linux" ;;
+  esac
+
+  case "$ARCH" in
+    x86_64) arch_name="amd64" ;;
+    arm64)  arch_name="arm64" ;;
+  esac
+
+  ensure_local_bin
+  tmp="$(mktemp -d)"
+
+  # The archive unpacks to gh_<version>_<os>_<arch>/bin/gh.
+  if [[ "$OS" == "macos" ]]; then
+    asset="gh_${version}_${os_name}_${arch_name}.zip"
+    url="https://github.com/cli/cli/releases/download/${tag}/${asset}"
+    info "Installing gh ${tag} from ${asset}"
+    fetch "$url" "$tmp/gh.zip"
+    run unzip -q "$tmp/gh.zip" -d "$tmp"
+  else
+    asset="gh_${version}_${os_name}_${arch_name}.tar.gz"
+    url="https://github.com/cli/cli/releases/download/${tag}/${asset}"
+    info "Installing gh ${tag} from ${asset}"
+    fetch "$url" "$tmp/gh.tar.gz"
+    run tar -xzf "$tmp/gh.tar.gz" -C "$tmp"
+  fi
+
+  run install -m 0755 "$tmp/gh_${version}_${os_name}_${arch_name}/bin/gh" "$LOCAL_BIN/gh"
+  rm -rf "$tmp"
+  INSTALLED+=("gh ${tag} (upstream release)")
+}
+
+# Required, not optional: octo.nvim drives the whole <leader>go namespace through
+# this binary. Debian bookworm does not package it, so the upstream release is
+# the fallback -- same shape as lazygit above.
+ensure_gh() {
+  have gh && { ok "gh"; check_gh_auth; return 0; }
+  MISSING+=("gh")
+  $CHECK_ONLY && { warn "gh is not installed"; return 0; }
+
+  if pkg_available gh; then
+    pkg_install gh && { INSTALLED+=("gh"); check_gh_auth; return 0; }
+  fi
+  install_gh_from_release
+  check_gh_auth
+}
+
+# Installed but signed out is the state that looks like a broken config: every
+# <leader>go key fails at the point of use with a gh error. Say so here instead.
+check_gh_auth() {
+  $CHECK_ONLY && return 0
+  gh auth status >/dev/null 2>&1 && return 0
+  warn "gh is not authenticated; run 'gh auth login' to enable <leader>go"
+}
+
 ensure_uv() {
   have uv && { ok "uv"; return 0; }
   MISSING+=("uv")
@@ -680,22 +747,8 @@ ensure_nerd_font() {
 
 ensure_optional() {
   if $SKIP_OPTIONAL; then
-    SKIPPED+=("gh, delta (--skip-optional)")
+    SKIPPED+=("delta (--skip-optional)")
     return 0
-  fi
-
-  # gh: GitHub issue/PR pickers.
-  if have gh; then
-    ok "gh"
-  else
-    $CHECK_ONLY && { MISSING+=("gh (optional)"); warn "gh is not installed (optional)"; }
-    if ! $CHECK_ONLY; then
-      if pkg_available gh; then
-        pkg_install gh && INSTALLED+=("gh")
-      else
-        warn "gh is not packaged here; see https://github.com/cli/cli#installation"
-      fi
-    fi
   fi
 
   # delta: nicer lazygit diffs. Package name differs from the binary name.
@@ -941,7 +994,7 @@ verify() {
   step "Verification"
   local failed=0
 
-  local -a required=(nvim git curl rg node npm python3 uv lazygit wakatime-cli)
+  local -a required=(nvim git curl rg node npm python3 uv lazygit gh wakatime-cli)
   local cmd
   for cmd in "${required[@]}"; do
     if have "$cmd"; then
@@ -1045,6 +1098,7 @@ main() {
 
   step "Tools"
   ensure_lazygit
+  ensure_gh
   ensure_uv
   ensure_hackatime_cli
   ensure_hackatime_config

@@ -222,41 +222,43 @@ return {
         desc = "Search history",
       },
 
-      -- Git
+      -- Git. <leader>gg is Neogit's status buffer and <leader>gl its commit
+      -- graph (lua/plugins/git.lua); these are the fuzzy-search counterparts,
+      -- so lazygit sits on gz and the commit picker on gC.
       {
-        "<leader>gg",
+        "<leader>gz",
         function() Snacks.lazygit() end,
         desc = "LazyGit",
       },
       {
         "<leader>gs",
         function() Snacks.picker.git_status() end,
-        desc = "Git status",
+        desc = "Jump to a changed file",
       },
       {
         "<leader>gb",
         function() Snacks.picker.git_branches() end,
-        desc = "Git branches",
+        desc = "Switch branch",
       },
       {
-        "<leader>gl",
+        "<leader>gC",
         function() Snacks.picker.git_log() end,
-        desc = "Git log",
+        desc = "Search past commits",
       },
       {
         "<leader>gL",
         function() Snacks.picker.git_log_line() end,
-        desc = "Git log (line)",
+        desc = "Commits that touched this line",
       },
       {
         "<leader>gS",
         function() Snacks.picker.git_stash() end,
-        desc = "Git stash",
+        desc = "Stashes (changes set aside)",
       },
       {
         "<leader>gB",
         function() Snacks.gitbrowse() end,
-        desc = "Open in browser",
+        desc = "Open this file on GitHub",
         mode = { "n", "x" },
       },
 
@@ -265,11 +267,6 @@ return {
         "<leader>tt",
         function() Snacks.terminal() end,
         desc = "Terminal (float)",
-      },
-      {
-        "<leader>tg",
-        function() Snacks.lazygit() end,
-        desc = "LazyGit",
       },
       {
         "<C-/>",

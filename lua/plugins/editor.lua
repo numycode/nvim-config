@@ -197,6 +197,34 @@ return {
     "folke/persistence.nvim",
     event = "BufReadPre",
     opts = {},
+    config = function(_, opts)
+      require("persistence").setup(opts)
+
+      -- Neogit tabs and octo:// buffers cannot be restored: their contents come
+      -- from a running process or the GitHub API, and octo's octo:// handler is
+      -- a BufReadCmd that does not exist until octo loads. `sessionoptions`
+      -- keeps both `buffers` and `tabpages` (config/options.lua), so without
+      -- this a restored session reopens them broken.
+      --
+      -- This has to be the autocmd, not a `pre_save` option: persistence's
+      -- config takes only `dir`, `need` and `branch` (persistence/config.lua),
+      -- so an unknown key is stored and never called -- it fails silently and
+      -- looks like it worked. `PersistenceSavePre` fires from VimLeavePre just
+      -- before `mks!` (persistence/init.lua:43).
+      vim.api.nvim_create_autocmd("User", {
+        group = vim.api.nvim_create_augroup("persistence-git-buffers", { clear = true }),
+        pattern = "PersistenceSavePre",
+        callback = function()
+          for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+            local ft = vim.bo[buf].filetype
+
+            if ft == "octo" or ft:match("^Neogit") then
+              pcall(vim.api.nvim_buf_delete, buf, { force = true })
+            end
+          end
+        end,
+      })
+    end,
     keys = {
       {
         "<leader>Ss",
