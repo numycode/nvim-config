@@ -219,7 +219,20 @@ interpreter. The LSP path travels via `python.pythonPath`.
 
 **Mason installs `basedpyright` and `ruff` from PyPI into a venv.** Debian and Fedora ship
 `pip` separately from `python3`; without `python3-pip` (and `python3-venv` on Debian) those two
-fail silently while everything else succeeds.
+fail silently while everything else succeeds. Fedora needs no `python3-venv` — it has no such
+package and bundles `venv` with `python3`; measured by creating a venv and pip-installing `ruff`
+into it, which is the thing Mason actually does.
+
+**`set -o pipefail` turns a short-circuiting reader into a false negative.** `install.sh` runs
+under `set -euo pipefail`, so `producer | grep -q ...` fails with **141** whenever `grep` finds
+its match and exits while the producer is still writing: the producer takes SIGPIPE, and
+pipefail promotes it to the pipeline's status. This bit `nerd_font_present`, which reported the
+JetBrainsMono Nerd Font *missing* on a machine with 98 font files installed and 96 matching
+`fc-list` entries — deterministically, 141 on 5/5 runs — so every run re-downloaded the font and
+`--check` listed it forever. The failure is backwards from how the code reads, which is why it
+survived. Capture into a variable and pattern-match; never pipe a large producer into `grep -q`
+or `head` here. (`nvim --version | head -1` and the `github_latest_tag` sed are fine only
+because their output fits the pipe buffer, so nothing blocks and no SIGPIPE is raised.)
 
 ## Conventions
 
@@ -433,14 +446,27 @@ Forced in a `fedora:latest` container with `detect_platform` printing `linux/fed
 | `lazygit_0.63.1_Linux_x86_64.tar.gz` | `version=0.63.1, os=linux, arch=amd64` |
 | `nvim-linux-x86_64.tar.gz` | `NVIM v0.12.4`, ELF 64-bit, runs Lua, `vim.list.unique` is a `function` |
 
+**The font step works, and is where the `pipefail` bug above was found.** `ensure_nerd_font`
+fetches JetBrainsMono v3.4.0 and unzips 98 files into `~/.local/share/fonts/JetBrainsMonoNerdFont`,
+after which `fc-list` matches 96 entries. Verified in a container across all three states —
+absent → installs; already present → no-op, nothing appended to `INSTALLED`; `--check` on a
+machine that has it → not listed as missing — and then run for real on the Fedora box, which had
+no `~/.local/share/fonts` at all. Note the terminal font still has to be set to
+"JetBrainsMono Nerd Font" by hand; the installer only warns.
+
+**Both `ensure_hackatime_config` branches are verified, with a dummy key under a fake `$HOME`.**
+No `~/.wakatime.cfg` plus `HACKATIME_API_KEY` writes the file at mode **0600** with the default
+`api_url`. An *existing* file is left **byte-identical** — asserted by sha256 with a sentinel key
+in it, with `HACKATIME_API_KEY` also set in the environment, which is the case that would matter
+if the leave-alone check were ever weakened. The installer never reads the key out of an existing
+file and does not need to: the key reaches Hackatime through vim-wakatime at runtime, not through
+`install.sh`. A fresh container has no such file, which is why full runs only ever show the skip.
+
 ### Still unverified
 
 - **macOS/arm64, from this box.** `install_gh_from_release`'s `macOS` + `.zip` mapping and the
   whole Homebrew branch are still only HEAD-checks and reading. That is the macOS box's job.
-- **The font step.** Every run here passed `--skip-font`.
-- **`ensure_hackatime_config`'s writing path.** Both runs hit the "no `HACKATIME_API_KEY`" skip
-  branch, so the branch that actually writes `~/.wakatime.cfg` is still exercised only by the
-  fake-`$HOME` sourcing trick, never by a full run.
+  The `brew install --cask font-jetbrains-mono-nerd-font` font branch is likewise unrun.
 - **Anything behind `gh auth login`.** Both runs warn that gh is unauthenticated, so octo and
   `<leader>go` are installed but never driven against GitHub.
 

@@ -916,7 +916,17 @@ sync_neovim() {
   local parser_out
   parser_out="$(nvim --headless -c 'lua
     local ok, res = pcall(function()
-      return { require("config.parsers").ensure({ timeout_ms = 900000 }) }
+      -- Two passes on purpose. A single 26-parser batch silently drops one to
+      -- three of them and still reports success upstream -- a different set
+      -- every run (vimdoc; dockerfile+sql; dockerfile+python; css+git_config+
+      -- html across four clean runs). A second pass installs just the
+      -- shortfall and takes seconds; measured 24/26 -> 26/26 in 6.3s.
+      local out
+      for _ = 1, 2 do
+        out = { require("config.parsers").ensure({ timeout_ms = 900000 }) }
+        if #(out[4] or {}) == 0 then break end
+      end
+      return out
     end)
     if not ok then
       print("parsers: FAILED " .. tostring(res))

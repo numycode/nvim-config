@@ -119,19 +119,18 @@ function M.ensure(opts)
     return report(("tree-sitter CLI not found; run `npm install` in %s"):format(vim.fn.stdpath("config")))
   end
 
+  -- Deliberately just the batch and its handle -- see the treesitter notes in
+  -- CLAUDE.md. nvim-treesitter drops one or two parsers out of a 26-parser
+  -- batch and resolves the handle anyway, and neither polling the wanted set
+  -- nor reinstalling the shortfall fixed it: polling to completion stalls for
+  -- the whole budget, and a retry loop with stall detection measured *worse*,
+  -- 3/26, because it cuts into compiles that were still progressing. So report
+  -- the shortfall honestly and leave the installing to upstream.
   local done, err = pcall(function()
     local handle = nts.install(missing_parsers())
-    if not opts.timeout_ms then
-      return
-    end
-
-    -- handle:wait() returns before the last compiles land: measured returning
-    -- after 1s against a 900s budget, and a headless `+qa` straight afterwards
-    -- kills the stragglers mid-compile. Poll the wanted set for what is left.
-    if handle and handle.wait then
+    if opts.timeout_ms and handle and handle.wait then
       handle:wait(opts.timeout_ms)
     end
-    vim.wait(opts.timeout_ms, function() return #missing_parsers() == 0 end, 200)
   end)
 
   return report((not done) and tostring(err) or nil)
