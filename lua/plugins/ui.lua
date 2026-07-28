@@ -1,3 +1,9 @@
+-- Backs the statusline's live-preview button. Kept in its own module because the
+-- <leader>p keymaps in plugins/webpreview.lua drive the same toggle. Required in
+-- lualine's `config` rather than here, for the reason gitbar_watch() is: this file
+-- is read during startup, and a bare `nvim` should pay for neither.
+local preview
+
 -- Custom-area highlights take literal colours rather than a highlight link, so pull
 -- one from the active colorscheme instead of hardcoding a tokyonight blue.
 local function hl_fg(group)
@@ -206,6 +212,19 @@ return {
           },
         },
         lualine_x = {
+          -- Run-in-browser button, on the buffers the preview server can serve.
+          -- 󰖟 starts it, 󰓛 stops it; both glyphs come from the same U+F0000
+          -- material-design block as the 󰊢 and 󰉋 buttons. The port is shown while
+          -- it is up so the URL is guessable without opening the browser again.
+          --
+          -- `cond` and the body are cheap reads -- see the comments in
+          -- config.preview on why neither may require("livepreview") itself.
+          {
+            function() return preview.running() and ("󰓛 Live :" .. preview.port) or "󰖟 Live" end,
+            cond = function() return preview.previewable() end,
+            color = function() return preview.running() and "DiagnosticOk" or nil end,
+            on_click = function() preview.toggle() end,
+          },
           -- Today's Hackatime total, refreshed from wakatime-cli at most once a
           -- minute. The __wakatime_statusline tag is what the plugin looks for
           -- before injecting its own copy of this component -- finding ours, it
@@ -246,6 +265,8 @@ return {
       -- component interplay is unaffected -- the watchers are the only addition,
       -- and they are registered here rather than in `init` so a bare `nvim`
       -- pays nothing for them: lualine is VeryLazy, and so is this.
+      preview = require("config.preview")
+
       require("lualine").setup(opts)
       gitbar_watch()
     end,
@@ -436,6 +457,7 @@ return {
         { "<leader>go", group = "github" },
         { "<leader>gx", group = "conflict" },
         { "<leader>m", group = "multicursor" },
+        { "<leader>p", group = "preview" },
         { "<leader>r", group = "refactor" },
         { "<leader>s", group = "search" },
         { "<leader>S", group = "session" },

@@ -42,6 +42,7 @@ lua/config/
   parsers.lua           treesitter parsers + ensure()   <- also read by install.sh
   tools.lua             Mason formatters/linters        <- also read by install.sh
   python.lua            venv auto-detection, :UvSync / :UvAdd / :UvRun / :RuffCheck
+  preview.lua           live-preview state shared by the Live button and <leader>p
 lua/plugins/            one file per concern; lazy.nvim specs
 ```
 
@@ -182,6 +183,71 @@ counter is still `0` — not by eyeballing latency. And A/B any component you ad
 render timings here range over 5-10µs run to run, so a single pair of numbers a few µs apart
 proves nothing. Measure with a file open only if you compare against a file-open baseline —
 the wakatime, LSP and devicons components dominate that number (~130µs) and will swamp yours.
+
+For scale, the Live button costs, against a stashed baseline: **0 spawns** over 1000 renders;
+~135µs → ~145µs per render on a buffer where it is *shown*, and nothing resolvable on one where
+`cond` hides it; **+0.9ms** of startup on the headless basis (medians 29.4 → 30.3, both sets
+ranging over ~3ms, 10 interleaved pairs). The pty basis could not resolve that at all — its
+medians sat 5ms apart inside sets ranging over 17 and 33ms, which is why the quiet headless
+basis is the one to A/B a change this size on.
+
+**The Live button gates on the buffer's *name*, not its `filetype`, and that is deliberate.**
+live-preview.nvim decides what it can serve with a set of filename patterns
+(`livepreview/utils.lua`, `supported_filetype`), so a `.htm` file — `filetype=html`, which every
+instinct says is previewable — fails its `%.html$` and is refused. Gate the button on the
+filetype and clicking it silently previews whatever *other* buffer `find_supported_buf()`
+stumbles on (`plugin/livepreview.lua:450-459`), which is worse than no button. `config.preview`
+therefore carries its own copy of upstream's extension list. Measured: `index.html`, `notes.md`
+and `logo.svg` get the button; `page.htm` (`ft=html`) and `main.py` do not.
+
+**`:LivePreview start` leaves a hit-enter prompt, and it blocks the event loop.** The command
+body ends in `print("live-preview.nvim: Opening browser at <url>")`
+(`plugin/livepreview.lua:470`), and that produces `Press ENTER or type command to continue` —
+captured off the screen of an 80-column pty, with the server already listening *behind* the
+prompt. A probe that called the command from a timer wrote its line before the call and nothing
+after; the editor sat there until the run was killed. Clicking a status-bar button and having
+the editor freeze is the worst possible version of this feature, so `config.preview.toggle()`
+runs `silent LivePreview start`. Measured with `silent`: no prompt, `vim.ui.open` still called
+with the right URL, loop alive afterwards, clean exit. `silent` suppresses only that `print` and
+the matching one in `close`; the plugin's real failures go through `vim.notify`, which it does
+not touch.
+
+**live-preview.nvim's `picker = "snacks.picker"` is documented and broken.** `LivePreview.pick`
+builds its dispatch as `picker_funcs[v] = picker[k]` over the `pickers` enum, and while the enum
+carries `snacks = "snacks.picker"` the picker module defines only `telescope`, `fzflua`,
+`minipick`, `vimui` and `pick` — there is no `snacks`, so the entry resolves to `nil` and the
+guard below it rejects the value with "config option 'snacks.picker' invalid". Measured: setting
+it made `<leader>pf` produce that notification and no picker at all. `picker = ""` (auto-detect)
+is correct here — its fallback chain reaches snacks through `vimui` + `snacks.picker.select`,
+which opens the real thing (`source=select`, input and list windows both up).
+
+**live-preview.nvim gates its HTML rewriting on the request's `Accept` header.** `serve_file`
+only injects the reload client (or renders Markdown to HTML) when `Accept` matches `text/html`
+(`server/handler.lua:93-103`) — deliberately, so an SVG pulled in by an `<img>` tag is not
+converted. `curl` sends `Accept: */*`, so `curl http://127.0.0.1:5500/index.html` returns the
+file **byte-identical to disk** and looks exactly like "live reload is broken". It is not: with
+`-H 'Accept: text/html,...'` the same request returns 250 bytes instead of 188, carrying
+`<script src='/live-preview.nvim/static/ws-client.js'></script>` immediately after `<head>`.
+
+Proving the reload itself needs a websocket client, not curl. A ~40-line raw-socket client in
+Python (handshake, then parse frames) is enough, and is what established both halves here:
+saving an `.html` pushed `{"type":"reload"}`, and *typing* in a `.md` with no write pushed
+`{"type":"update","content":...}` — twice, one frame per `TextChanged`. That asymmetry is
+upstream's design (`livepreview/init.lua:273-288`), not a bug: HTML reloads on write because it
+is watched on the filesystem, everything else streams from the buffer.
+
+**A `pkill`ed probe leaves a swap file, and the next run hangs on `E325`.** A gating probe that
+walked five buffers stopped dead after the second, with no error and no output — it was sitting
+on a swap-file prompt for a file an earlier killed probe had open. It reads as a hang in the
+code under test. `rm ~/.local/state/nvim/swap/*<label>*` between runs, alongside the `pkill`
+that CLAUDE.md already recommends.
+
+**`script -q /dev/null nvim` inherits the caller's 80 columns, which truncates the statusline.**
+Two separate checks failed on this and looked like real bugs: the running button's label
+searched for as `󰓛 Live :5500` was on screen as `<ive :5500`, the leading glyph cut by the `<`
+truncation marker. A statusline assertion needs a pty of a size you chose. `pty.fork()` plus a
+`TIOCSWINSZ` ioctl gives one in about twenty lines of Python; at 200 columns the same probe
+found the button at column 132 and the round trip asserted cleanly.
 
 **`neogit.action("commit", "commit")` does not work.** The documented
 `neogit.action(popup, action)` API synthesises a stub popup (`close`, `state.env`,
@@ -356,7 +422,8 @@ because their output fits the pipe buffer, so nothing blocks and no SIGPIPE is r
   walkthrough uses it.
 - **Leader groups**: `f` find, `s` search, `c` code, `g` git (`gh` hunks, `go` github,
   `gx` conflicts, `g?` the plain-English walkthrough), `x` diagnostics,
-  `u` UI toggles, `b` buffer, `S` session, `t` terminal, `m` multicursor, `r` refactor.
+  `u` UI toggles, `b` buffer, `S` session, `t` terminal, `m` multicursor, `r` refactor,
+  `p` preview (live server for HTML/Markdown/SVG/AsciiDoc).
 - **Lockfile**: `lazy-lock.json` is committed. `install.sh` runs `:Lazy restore`, never
   `sync` — `sync` updates everything and rewrites the lockfile.
 - **`node_modules/` is gitignored.** It holds a platform-specific tree-sitter binary; it was
