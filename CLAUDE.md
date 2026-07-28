@@ -348,6 +348,12 @@ because their output fits the pipe buffer, so nothing blocks and no SIGPIPE is r
 - **Keymaps**: plugin keymaps live with their plugin spec (`keys = {}`); only
   plugin-independent ones go in `lua/config/keymaps.lua`. Every mapping needs a `desc` —
   which-key is the discovery mechanism and the JetBrains-muscle-memory replacement.
+- **User-facing text spells keys out**: "press Ctrl-S", "Space, g, c" — never `<C-s>` or
+  `<leader>gc`. Vim notation belongs in `desc` strings, where which-key renders the literal
+  keys beside it, and nowhere else: not in winbars, floats, prompts or hint lines. The owner
+  came from JetBrains and does not read the notation; see "Spell keys out in prose" above for
+  the measurement that established this. Expand `<leader>` to "Space" the first time a
+  walkthrough uses it.
 - **Leader groups**: `f` find, `s` search, `c` code, `g` git (`gh` hunks, `go` github,
   `gx` conflicts, `g?` the plain-English walkthrough), `x` diagnostics,
   `u` UI toggles, `b` buffer, `S` session, `t` terminal, `m` multicursor, `r` refactor.
@@ -418,6 +424,40 @@ script -q /dev/null nvim some.py -c 'lua
 To read the tabline itself, `nvim_eval_statusline(_G.nvim_bufferline(), { use_tabline = true })`
 returns both the visible `.str` (escapes resolved) and its `.width` — that is how to prove a
 click label is present without a screenshot, and where a column lands.
+
+**Arm the answer to a `vim.fn.confirm` *before* calling the thing that prompts.** `confirm`
+blocks the event loop, so in a driver script written the obvious way —
+`require("config.git").commit(); vim.defer_fn(function() vim.api.nvim_input("S") end, 1200)` —
+the second statement never runs: `commit()` has not returned. The prompt sits unanswered and the
+run burns its whole timeout. Reverse them, and the deferred keypress lands while `confirm` is
+blocking:
+
+```lua
+vim.defer_fn(function() vim.api.nvim_input("S") end, 1200)
+require("config.git").commit()
+```
+
+Pre-queuing the key with no delay does not work either — `confirm` is not up yet to consume it.
+And remember `confirm` answers to the **accelerator letter**, not a digit.
+
+**Auditing keymaps needs a buffer that would actually have them.** `<leader>g?` claims 13
+keys, and a cheat sheet that names a key which does not exist is worse than no cheat sheet — so
+assert them. But gitsigns sets `<leader>ghs`, `<leader>ghp`, `<leader>ghr`, `]h` and `[h`
+buffer-locally from `on_attach`, so a `maparg` sweep in a scratch buffer reports **5 missing**
+and looks like five broken mappings. Open a tracked file first and wait for the attach:
+
+```sh
+nvim --headless init.lua -c 'lua
+  vim.wait(8000, function() return vim.fn.maparg("]h", "n", false, true).buffer == 1 end, 200)
+  for _, k in ipairs({ "<leader>ghs", "]h", "[h" }) do
+    local m = vim.fn.maparg(k, "n", false, true)
+    print(k .. " " .. tostring(type(m) == "table" and next(m) ~= nil))
+  end' -c 'qa'
+```
+
+**Kill strays.** A driver that hangs on an unanswered prompt leaves a live `nvim` holding the
+scratch repo. `pkill -f "repos/<label>"` before re-running, or the next run's git assertions
+race against it.
 
 `:checkhealth` should be clean. Ignore `snacks.image` complaints about kitty/magick/mmdc, and
 the `vim.ui.input`/`vim.ui.select` errors under `--headless` — snacks wires those on `UIEnter`,
