@@ -257,6 +257,55 @@ in the process being tested: a 101 with no handshake in your own server means yo
 someone else. `lsof -nP -i:5500 | grep LISTEN` before believing any result, and kill strays —
 CLAUDE.md already said so, and the advice was ignored anyway.
 
+**On Linux, deleting any watched directory kills the live preview for the rest of the session —
+and a plain `git gc` is enough to do it.** This is the Linux-only half of the plugin and it does
+not exist on macOS, so nothing in the macOS handoff could have caught it. Two upstream bugs that
+compound, both measured on Fedora x86_64:
+
+- `Server:watch_dir` branches on `uv.os_uname().sysname`. macOS and Windows get one recursive
+  `uv.new_fs_event`; **everything else gets `fswatch.Watcher`**, a hand-rolled tree of
+  *non-recursive* watchers, one per directory, extended as directories appear.
+- `Watcher:close()` (`server/fswatch.lua:102`) is a bare `self.watcher:close()` with no nil
+  guard, while `Watcher:start()` sets `self.watcher = nil` when its directory disappears. So
+  once any watched directory is deleted, `close()` throws — and everything after the throw is
+  skipped: `Server:stop` never nils `_watcher` nor deletes the `LivePreview` augroup, and
+  `livepreview.close()` never nils `serverObj`. Because `start()` calls `close()` first, the
+  next start throws too (`handle 0x… is already closing`, same line). Preview dead until you
+  restart Neovim.
+- The blast radius is much wider than "don't delete folders", because **`.git` is watched**:
+  upstream's `if subdir ~= ".git"` compares `dir .. "/" .. name`, a *full path*, against the
+  bare string, so it never matches. Measured: `git gc --prune=now` in a two-commit repo removed
+  6 directories under `.git/objects` and wedged the preview exactly as deleting a source folder
+  did. git runs `gc` on its own via `gc.auto`.
+
+`config.preview` works around it — `start()`/`stop()`/`toggle()` catch the throw, clear
+`livepreview.serverObj` and drop the augroup, which is what lets the next start succeed. Clearing
+`serverObj` also defuses the plugin's own `VimLeavePre` handler, which bails out early when it is
+nil instead of throwing on the way out (that throw is what leaves a hit-enter prompt on quit).
+Keep `<leader>po`/`<leader>px` pointed at `config.preview`, not at the raw commands.
+
+Verified by controlled A/B, not by reading: with the deletion, `close` fails and the restart
+fails; in the identical run *without* it, both succeed. And recovery is proven from the wire —
+after the reset the server rebound the port, completed a 101 handshake and delivered a real
+`{"type":"reload"}` frame on the next write. `is_running()` alone would have lied: it reports
+`true` for a moment after the failed close while the port already has **zero** listeners.
+
+**live-preview's `on_events` is either/or, fixed at start time by the *first* file's type.**
+`livepreview/init.lua` passes `LivePreviewDirChanged` (fs-watch → `reload`) when
+`supported_filetype(filepath) == "html"`, and otherwise `TextChanged`/`TextChangedI` (→ `update`
+carrying the unsaved buffer). An HTML preview therefore gets **no** live typing, and a Markdown
+preview gets **no** fs-watch reload, whatever you subsequently open. Do not test one and conclude
+the other works. Measured on Linux: starting on `index.html` produced `reload` on every write —
+top level, `nested/deep/` two levels down, a directory created *after* the server started, and
+inside `.git` — while starting on `notes.md` produced `update` frames with the typed text and the
+file unchanged on disk, plus `scroll` frames from `sync_scroll`.
+
+**`vim.wait()` blocks the loop that detects `TextChanged`.** A headless harness that starts the
+server and then sits in `vim.wait(16000, …)` sees fs-watch `reload` frames arrive normally but
+**never** a single `update` frame, however the buffer is modified — including via
+`nvim_buf_set_lines`. That is the harness, not the plugin: the same test under a real PTY
+produced the `update` immediately. Use a PTY for anything that depends on a text-change autocmd.
+
 **A `pkill`ed probe leaves a swap file, and the next run hangs on `E325`.** A gating probe that
 walked five buffers stopped dead after the second, with no error and no output — it was sitting
 on a swap-file prompt for a file an earlier killed probe had open. It reads as a hang in the
@@ -447,6 +496,15 @@ because their output fits the pipe buffer, so nothing blocks and no SIGPIPE is r
   `p` preview (live server for HTML/Markdown/SVG/AsciiDoc).
 - **Lockfile**: `lazy-lock.json` is committed. `install.sh` runs `:Lazy restore`, never
   `sync` — `sync` updates everything and rewrites the lockfile.
+  **`restore` does not restore in a run that also installs something.** Measured on Fedora:
+  with a plugin missing *and* others sitting at newer-than-pinned commits, one `+Lazy! restore`
+  left the drifted ones alone and **rewrote `lazy-lock.json` to record the drift** — the
+  opposite of the job. Run it a second time and it checks the drifted plugins back out and
+  leaves the lockfile byte-identical. So after any `git pull` that adds a plugin, restore twice,
+  and check `git status lazy-lock.json` before committing: a lockfile change you did not intend
+  is this bug, not an upstream bump. The fresh-machine path is **fine** — a pristine data dir
+  cloned all 39 at exactly their pinned commits with the lockfile untouched, which is the case
+  `install.sh` actually faces, so its single call is not a bug.
 - **`node_modules/` is gitignored.** It holds a platform-specific tree-sitter binary; it was
   once committed (25MB, macOS-arm64) which broke portability. Fresh clones run `npm install`.
 
@@ -512,6 +570,25 @@ script -q /dev/null nvim some.py -c 'lua
 To read the tabline itself, `nvim_eval_statusline(_G.nvim_bufferline(), { use_tabline = true })`
 returns both the visible `.str` (escapes resolved) and its `.width` — that is how to prove a
 click label is present without a screenshot, and where a column lands.
+
+**`script -q /dev/null nvim …` is BSD syntax and does not work on the Fedora box.** Two separate
+traps, and both fail *silently* in a way that reads as "my Lua is broken":
+
+- Fedora does not ship `script` at all by default — util-linux is installed but the binary lives
+  in the separate **`util-linux-script`** package. Without it every PTY recipe above exits
+  **127** and writes nothing, so the probe file is simply absent.
+- Even installed, util-linux `script` takes the command via `-c`: `script -qec 'nvim …'
+  /dev/null`. The BSD trailing-argv form is what macOS wants.
+
+Rather than depend on either, drive a PTY from Python — no package, no root, and it works the
+same on both boxes. `scratchpad/pty_run.py` in the session that wrote this is the whole thing:
+`pty.fork()`, `TIOCSWINSZ` to a chosen size, `execvp`, drain the master fd. Sizing it explicitly
+also side-steps the 80-column truncation trap above.
+
+**Also: zsh is the shell here, and it mangles inline `-c 'lua …'` blocks.** A multi-line Lua
+argument containing `%`, `<Esc>` or braces dies with `no matches found:` before nvim ever starts
+— again, no probe file, looking exactly like a config error. Put the Lua in a file and use
+`-c "luafile /path/to.lua"`, and pass values in through `vim.env`.
 
 **Arm the answer to a `vim.fn.confirm` *before* calling the thing that prompts.** `confirm`
 blocks the event loop, so in a driver script written the obvious way —
@@ -818,12 +895,39 @@ Measured on the macOS arm64 box on 2026-07-27/28, against live-preview.nvim
   no screen-recording permission — so nothing has *looked* at the rendered page. The reload is
   proven as far as "the browser tore down its socket and re-fetched"; that it repainted correctly
   is inference.
-- **Linux.** The plugin takes a different fs-watch branch off `uv.os_uname().sysname` —
-  `fswatch.Watcher` rather than a recursive `uv.new_fs_event` — and only the Darwin branch has
-  been exercised. The Debian and Fedora containers have never run the preview.
-- **`sync_scroll`**, left at its default `true`. It installs `CursorMoved`/`CursorMovedI`
-  autocmds that send scroll messages; the cost of those was never measured, and no scroll
-  behaviour was tested.
+- **`sync_scroll`'s cost**, left at its default `true`. `scroll` frames are now confirmed to go
+  out on cursor movement (seen on the wire on Linux), but the cost of its `CursorMoved`/
+  `CursorMovedI` autocmds has still never been measured, and no scroll *behaviour* — that the
+  page actually follows — has been tested.
+- **The preview inside the Debian and Fedora containers.** The Linux branch is now measured, but
+  on the Fedora *host* (see below), not in the container images.
+
+### The Linux fs-watch branch: measured 2026-07-28, Fedora x86_64 host
+
+This closes the "Linux" unknown above. `uv.os_uname().sysname` is `Linux`, so the
+`fswatch.Watcher` tree is the code under test throughout.
+
+| Claim | How it was established |
+| --- | --- |
+| Serves and rewrites | `GET /index.html` 200 with `ws-client.js` injected; `/notes.md` 200, 1756 bytes; missing file 404 |
+| Reload on write | raw websocket client received `{"type":"reload"}` — top level, `nested/deep/` (depth 2), `assets/`, and a directory created *after* the server started |
+| Unsaved markdown streams | `update` frame carrying `"# Heading \| \| body text \| typed but never saved"`, `notes.md` byte-identical on disk |
+| `sync_scroll` is live | `scroll` frames arrive on cursor movement |
+| Survives directory deletion | `rmtree` of a watched subtree: server keeps listening, new directories still watched, top-level writes still reload |
+| No stray server | 0 listeners on 5500 after `:qa!`, via upstream's own `VimLeavePre` |
+| `:checkhealth livepreview` | Nvim 0.12.4 compatible, `sh` present, `snacks.picker` found, config table shows our port/`browser`/`dynamic_root`/`picker` |
+| The button renders | `󰓛 Live :5500` seen in the rendered statusline under a 200-column PTY |
+| **`.git` is watched** | a servable file written *inside* `.git` fired a reload — the `subdir ~= ".git"` guard is dead code |
+| **Deleting a watched dir wedges it** | see the entry in "Things that will bite you"; `git gc` reproduces it |
+
+`:checkhealth livepreview` reports **"No healthcheck found"** unless the plugin is loaded first —
+it is `cmd`-lazy, so a bare `nvim -c 'checkhealth livepreview'` proves nothing. Force it with
+`require("lazy").load({ plugins = { "live-preview.nvim" } })`.
+
+Two cost notes: the watcher tree held **15 inotify watches** for a 14-directory webroot, 9 of
+those directories being `.git` — real waste, but `max_user_watches` is 274132 here, so not a
+practical limit. And the `config.preview` workaround added no measurable startup cost: headless
+medians 25.4ms with it and 25.9ms without, inside sets spanning 24.4–28.4ms.
 
 ## Style of work expected here
 
@@ -836,3 +940,11 @@ turned an hour of clean-looking measurements into a fabricated conclusion about 
 collection — complete with a plausible mechanism in the source and an A/B that "confirmed" it.
 Both arms were talking to a process that was not under test. The check that would have caught it
 immediately was already written down here: kill strays, and look at what is listening.
+
+Its sequel is milder but the same shape: **an empty probe file is not evidence of anything.**
+Verifying the Linux branch hit three unrelated ways to write no output at all — `script` absent
+on Fedora (exit 127), zsh mangling an inline `-c 'lua …'` block before nvim started, and
+`vim.wait` blocking the loop that detects `TextChanged`. Each looked exactly like "the feature is
+broken", and one of them nearly got written up as a plugin bug. Before concluding a probe proved
+a negative, prove the probe *ran*: check its exit status, and have it write a sentinel on the
+success path so you can tell "it failed" from "it never got there".
