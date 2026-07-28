@@ -16,11 +16,13 @@ return {
     -- the statusline goes through `:LivePreview` for exactly this reason.
     cmd = "LivePreview",
     keys = {
-      -- `silent` on the two that print: see the comment on config.preview.toggle.
+      -- Start and stop go through config.preview rather than straight at the
+      -- commands, for the `silent` and for the Linux fswatch recovery -- see the
+      -- comments there. `pick` has neither problem and stays a plain command.
       { "<leader>pp", function() require("config.preview").toggle() end, desc = "Toggle live preview" },
-      { "<leader>po", "<cmd>silent LivePreview start<CR>", desc = "Open live preview in browser" },
+      { "<leader>po", function() require("config.preview").start() end, desc = "Open live preview in browser" },
       { "<leader>pf", "<cmd>LivePreview pick<CR>", desc = "Pick a file to preview" },
-      { "<leader>px", "<cmd>silent LivePreview close<CR>", desc = "Stop live preview server" },
+      { "<leader>px", function() require("config.preview").stop() end, desc = "Stop live preview server" },
     },
     config = function()
       -- `require("livepreview").setup()` is marked deprecated upstream; this is
