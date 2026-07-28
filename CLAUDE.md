@@ -236,6 +236,27 @@ saving an `.html` pushed `{"type":"reload"}`, and *typing* in a `.md` with no wr
 upstream's design (`livepreview/init.lua:273-288`), not a bug: HTML reloads on write because it
 is watched on the filesystem, everything else streams from the buffer.
 
+**live-preview.nvim ignores the result of `bind`, so a second server silently loses the port and
+the first one keeps answering.** `Server:start` calls `self.server:bind(ip, port)` and never
+looks at what it returned (`server/init.lua`), so when the port is taken the new server is inert
+while `is_running()` reports `true` and the button shows `󰓛 Live :5500`. Requests are answered
+the whole time — by the *other* process, out of the *other* webroot. `M.start`'s
+`processes_listening_on_port` warning is the only signal that anything is wrong, and it is a
+`vim.notify` WARN, so `silent` does not suppress it: verified by squatting on 5500 from a second
+Neovim and watching `NOTIFY[3] Port 5500 is being used by another process 'nvim' (PID …)` arrive
+through the silenced toggle, with `running=true` alongside it. Heed that notification.
+
+This cost most of an afternoon, because it also poisons testing. A probe whose `qa!` never
+fired kept port 5500, and **every subsequent run for the next hour was measured against that
+zombie** — the new server bound nothing, its fs watcher fired correctly in its own process, and
+the websocket client that had just completed a 101 handshake was connected to the old process,
+so the client list read `clients=0` while a reload was plainly being requested. That produced a
+tidy, entirely false story about garbage collection eating the macOS fs watcher, with an A/B to
+match. What broke it open was wrapping `websocket.handshake` and finding it was *never called*
+in the process being tested: a 101 with no handshake in your own server means you are talking to
+someone else. `lsof -nP -i:5500 | grep LISTEN` before believing any result, and kill strays —
+CLAUDE.md already said so, and the advice was ignored anyway.
+
 **A `pkill`ed probe leaves a swap file, and the next run hangs on `E325`.** A gating probe that
 walked five buffers stopped dead after the second, with no error and no output — it was sitting
 on a swap-file prompt for a file an earlier killed probe had open. It reads as a hang in the
@@ -524,7 +545,45 @@ nvim --headless init.lua -c 'lua
 
 **Kill strays.** A driver that hangs on an unanswered prompt leaves a live `nvim` holding the
 scratch repo. `pkill -f "repos/<label>"` before re-running, or the next run's git assertions
-race against it.
+race against it. **A stray also holds port 5500**, and that failure is silent and misleading —
+see the `bind` entry in "Things that will bite you". `lsof -nP -i:5500 | grep LISTEN` before and
+after anything touching the preview.
+
+### Testing the live preview
+
+Three things need proving separately, and only the third is the feature.
+
+**A pty of a size you chose**, because 80 columns truncates the statusline out from under any
+assertion about a button:
+
+```python
+pid, fd = pty.fork()
+if pid == 0: os.execvp(argv[0], argv)
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+```
+
+**The button**, by finding it in the resolved bar and clicking where it actually is — the column
+must be computed, not guessed, since `nvim_eval_statusline(...).str` has the escapes resolved but
+`find` returns a byte offset:
+
+```lua
+local ev = vim.api.nvim_eval_statusline(require("lualine").statusline(true), {})
+local at = ev.str:find("󰖟 Live", 1, true)
+local col = at and vim.api.nvim_strwidth(ev.str:sub(1, at - 1))
+vim.api.nvim_input_mouse("left", "press", "", 0, vim.o.lines - 2, col + 1)
+```
+
+**The reload**, which needs a websocket client — `curl` cannot see it, and worse, `curl` sends
+`Accept: */*` and so gets the untransformed file back and makes the feature look broken. A
+~40-line raw-socket client in Python (handshake, then unmask and print frames) is enough. Expect
+`{"type":"reload"}` after writing an `.html`, and `{"type":"update","content":…}` while merely
+typing in an `.md`.
+
+To watch a *real* browser instead, sample `lsof -nP -i:5500` before and after the save: a reload
+shows up as new ephemeral local ports on the browser side, because the client closes its socket
+and `onclose` calls `window.location.reload()` (`static/ws-client.js`). Measured on this machine
+with the default handler, which is **Zen** (`app.zen-browser.zen`), not Safari — two sockets
+before the save, three additional ones after.
 
 `:checkhealth` should be clean. Ignore `snacks.image` complaints about kitty/magick/mmdc, and
 the `vim.ui.input`/`vim.ui.select` errors under `--headless` — snacks wires those on `UIEnter`,
@@ -732,8 +791,48 @@ does **not** put anything in `~/.local/bin`, so looking for it there reports "No
 directory" and looks like a failed extract. `detect_platform` must print `linux/fedora/x86_64` —
 `arm64` means you are on the wrong box and the run proves nothing new.
 
+## Handoff: what the live preview has and has not proven
+
+Measured on the macOS arm64 box on 2026-07-27/28, against live-preview.nvim
+`a30e54e51e7480d7060c8c8185f2a963ad3518b4`.
+
+| Claim | How it was established |
+| --- | --- |
+| Button appears only where the server can serve | `index.html`, `notes.md`, `logo.svg` yes; `page.htm` and `main.py` no; none on the dashboard, whose statusline lualine disables outright |
+| Click starts it | 200-column pty, button found at column 132, `nvim_input_mouse` → `running=true` and the right URL handed to `vim.ui.open` |
+| Click stops it | label flips to `󰓛 Live :5500` at column 128, second click returns `running=false` and the `󰖟` glyph |
+| No hit-enter prompt | probe reaches its post-command line and exits 0; without `silent` it never does |
+| The page is served, rewritten | 200, and 188 → 250 bytes with a browser `Accept`, carrying the `ws-client.js` tag after `<head>` |
+| Reload fires on write | raw websocket client received `{"type":"reload"}` |
+| Markdown streams unsaved | `{"type":"update","content":…}` while typing, file on disk unchanged |
+| A real browser reloads | Zen held 2 sockets; three new ephemeral ports after the save |
+| Costs nothing to have | 0 spawns/1000 renders, ~135 → ~145µs where shown, +0.9ms headless startup |
+| `<leader>p` group | which-key renders `p ➜ +preview`; all four maps resolve with their descs; `<leader>pf` opens a snacks picker (`source=select`) |
+| No stray server | `lsof -i:5500` empty after `:qa`, via upstream's own `VimLeavePre` |
+| `:checkhealth livepreview` | Nvim compatible, `sh` present, snacks picker found, server healthy, webroot = cwd |
+
+### Still unverified
+
+- **What the page actually looks like.** Every claim above is from the wire and the socket
+  table. `screencapture` fails here with "could not create image from display" — the process has
+  no screen-recording permission — so nothing has *looked* at the rendered page. The reload is
+  proven as far as "the browser tore down its socket and re-fetched"; that it repainted correctly
+  is inference.
+- **Linux.** The plugin takes a different fs-watch branch off `uv.os_uname().sysname` —
+  `fswatch.Watcher` rather than a recursive `uv.new_fs_event` — and only the Darwin branch has
+  been exercised. The Debian and Fedora containers have never run the preview.
+- **`sync_scroll`**, left at its default `true`. It installs `CursorMoved`/`CursorMovedI`
+  autocmds that send scroll messages; the cost of those was never measured, and no scroll
+  behaviour was tested.
+
 ## Style of work expected here
 
 Report what was measured, not what should follow from the code. Several bugs in this repo
 survived because a plausible-looking check (`language.add`, coloured terminal output, a plugin
 being `loaded`) was accepted as proof. When something is unverified, say so.
+
+The live preview work is the cautionary tale to read first. A stray `nvim` holding port 5500
+turned an hour of clean-looking measurements into a fabricated conclusion about garbage
+collection — complete with a plausible mechanism in the source and an A/B that "confirmed" it.
+Both arms were talking to a process that was not under test. The check that would have caught it
+immediately was already written down here: kill strays, and look at what is listening.
