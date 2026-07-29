@@ -290,6 +290,41 @@ after the reset the server rebound the port, completed a 101 handshake and deliv
 `{"type":"reload"}` frame on the next write. `is_running()` alone would have lied: it reports
 `true` for a moment after the failed close while the port already has **zero** listeners.
 
+**live-preview's `connecting_clients` only ever grows, and holds every TCP connection — not just
+websockets.** `Server:start`'s listen callback does `table.insert(M.connecting_clients, client)`
+for *every* accepted connection (`server/init.lua:129`), and the only `table.remove` is on the
+error branch above it. So each asset request from a page load — markdown-it, the CSS, katex,
+mermaid, `ws-client.js` — leaves a permanent entry. Measured: one Firefox page load put **18**
+entries in the list. It is a *module-level* table, so it also survives `Server:stop` and every
+restart, including a wedge recovery. `send_scroll`/reload then write a frame to every stale entry,
+which is exactly the ~3.2µs-per-entry term in the `sync_scroll` table above. The nearby guard
+`if #M.connecting_clients then` is `if <number>`, always true — they meant `> 0`.
+
+**The `sync_scroll` autocmds are registered with no group, so nothing ever removes them.**
+`Server:new` creates `WinScrolled`/`CursorMoved`/`CursorMovedI` with a bare
+`api.nvim_create_autocmd(...)` and no `group` field (`server/init.lua:76-89`), while the cleanup
+in `Server:stop` is `nvim_del_augroup_by_name("LivePreview")` — which cannot see them. Measured
+across start/stop cycles: ungrouped `CursorMoved` handlers went 2 → 3 → 4 → 5 → 6, one per start,
+with stop removing none, and a wedge recovery adding one like any other start. Two consequences
+for anyone measuring here: the accumulation is nearly free (they early-return, see above), and
+**a group-filtered query cannot find them** — `nvim_get_autocmds({group = "LivePreview", event =
+"CursorMoved"})` returns `0` whether `sync_scroll` is on or off, which reads exactly like "the
+handler was never registered". Count ungrouped `CursorMoved` autocmds instead. This is also why
+"does the augroup double-fire" is the wrong question: the augroup is clean, and the thing that
+does accumulate is not in it.
+
+**`:LivePreview start` opens a *real* browser on this desktop, and that poisons any measurement
+of the preview.** The command ends in `vim.ui.open`, which on the Fedora box launches the default
+handler — a full Firefox — whose asset requests land in `connecting_clients`. A `sync_scroll` A/B
+run without stubbing it measured **174µs/move** and looked cleanly resolvable; the same A/B with
+`vim.ui.open` stubbed measured **6µs, inside the noise**. The first number was not the autocmd, it
+was 18 websocket writes to a browser nobody asked for. Worse, that browser *outlives the probe*:
+`ws-client.js` reloads on socket close, so it reconnects to port 5500 for as long as it is alive,
+and a later run inherits it. Stub `vim.ui.open` in any preview probe, and check
+`ps -eo comm | grep firefox` alongside the `lsof -nP -i:5500` that CLAUDE.md already demands.
+Note `pkill -f firefox` **kills its own shell**, because the pattern matches the shell's own
+command line; use `killall -9 firefox` or a `[f]irefox`-style pattern.
+
 **live-preview's `on_events` is either/or, fixed at start time by the *first* file's type.**
 `livepreview/init.lua` passes `LivePreviewDirChanged` (fs-watch → `reload`) when
 `supported_filetype(filepath) == "html"`, and otherwise `TextChanged`/`TextChangedI` (→ `update`
@@ -662,6 +697,16 @@ and `onclose` calls `window.location.reload()` (`static/ws-client.js`). Measured
 with the default handler, which is **Zen** (`app.zen-browser.zen`), not Safari — two sockets
 before the save, three additional ones after.
 
+**To read the rendered page itself, drive headless Firefox over Marionette.** There is no
+selenium or playwright on the Fedora box and neither is needed: `firefox --headless --marionette
+--profile $(mktemp -d)` opens a JSON-over-TCP server on port 2828 whose wire format is just
+`<len>:<json>`, and ~60 lines of Python gives `WebDriver:NewSession`, `WebDriver:Navigate` and
+`WebDriver:ExecuteScript`. That is how "the page actually follows the cursor" was settled —
+`return window.scrollY` before and after a cursor jump — and it is the only tool here that can
+answer a question about the DOM rather than the socket. Kill it with `killall -9 firefox` when
+done; see the `vim.ui.open` entry in "Things that will bite you" for why a surviving browser
+silently corrupts the next run.
+
 `:checkhealth` should be clean. Ignore `snacks.image` complaints about kitty/magick/mmdc, and
 the `vim.ui.input`/`vim.ui.select` errors under `--headless` — snacks wires those on `UIEnter`,
 which never fires without a UI. Verify with a real PTY (`script -q /dev/null nvim ...`).
@@ -762,6 +807,30 @@ listed no failures, and both were then driven past `:checkhealth` with the funct
 | LSP clients on a `.py` | `basedpyright` + `ruff` | `basedpyright` + `ruff` |
 | treesitter | active, 2 captures | active, 2 captures |
 | inlay hints | enabled, 4 returned | enabled, 4 returned |
+
+**A bootstrap that has to install live-preview.nvim has now run** — re-measured 2026-07-28, both
+targets, because every earlier run predates the plugin existing in this config. Same
+stdin/bootstrap path, both Summaries clean:
+
+| | fedora:latest | debian:latest |
+| --- | --- | --- |
+| live-preview.nvim checkout | `a30e54e5` = the `lazy-lock.json` pin | `a30e54e5` = the pin |
+| `git status lazy-lock.json` in the clone | clean | clean |
+| preview actually serves | `{"type":"reload"}` off a real websocket | `{"type":"reload"}` off a real websocket |
+
+The lockfile row is the one that matters: a *dirty* `lazy-lock.json` after a bootstrap is the
+"restore does not restore" bug under Conventions, not an upstream bump. Both clones were
+byte-clean, and the fresh-machine path stays the case `install.sh` handles correctly.
+
+The pin row is weaker than it looks and should be re-read when upstream moves: **upstream `main`
+is currently at the pinned commit too**, so this run cannot distinguish "restored to the pin"
+from "cloned main and got lucky". It proves the plugin installs and is not *ahead* of the pin; it
+does not prove drift would be corrected.
+
+`is_running()` was deliberately not accepted as evidence for the third row — upstream ignores the
+result of `bind()`, so it reports `true` for a server that owns nothing. Only a frame off the
+wire counts. Containers have no browser, so `vim.ui.open` failing there is expected and is not
+part of the assertion; the server starts before the browser is opened.
 
 Inlay hints being *enabled* is the weak half of that row. The half that matters is
 `vim.lsp.inlay_hint.get()` returning real labels — `: int`, `: str`, `name=` — because that is
@@ -890,17 +959,18 @@ Measured on the macOS arm64 box on 2026-07-27/28, against live-preview.nvim
 
 ### Still unverified
 
-- **What the page actually looks like.** Every claim above is from the wire and the socket
-  table. `screencapture` fails here with "could not create image from display" — the process has
-  no screen-recording permission — so nothing has *looked* at the rendered page. The reload is
-  proven as far as "the browser tore down its socket and re-fetched"; that it repainted correctly
-  is inference.
-- **`sync_scroll`'s cost**, left at its default `true`. `scroll` frames are now confirmed to go
-  out on cursor movement (seen on the wire on Linux), but the cost of its `CursorMoved`/
-  `CursorMovedI` autocmds has still never been measured, and no scroll *behaviour* — that the
-  page actually follows — has been tested.
-- **The preview inside the Debian and Fedora containers.** The Linux branch is now measured, but
-  on the Fedora *host* (see below), not in the container images.
+- **What the page actually looks like**, in the sense of rendering fidelity. Nothing has taken a
+  screenshot. The DOM is no longer unexamined, though — a headless Firefox on the Fedora box
+  reported 801 `.source-line` elements, the injected `ws-client.js` tag, and a `scrollHeight` of
+  40931 against a 714px viewport, and the page demonstrably scrolls (see the Linux table below).
+  So "the page is built and responds"; "it is *pretty*" is still inference.
+- **Markdown `update` streaming inside the containers.** The container assertion is the fs-watch
+  `reload` path only, driven headless — which is legitimate, since only `TextChanged` needs a PTY.
+  The `update` half is measured on the Fedora *host*, not in the images.
+- **The `.git` inotify waste**, deliberately left alone: 9 of 15 watches are `.git` subdirectories
+  because upstream's `subdir ~= ".git"` guard compares a full path against the bare string.
+  Harmless at this scale against a `max_user_watches` of 274132, and not worth patching upstream
+  behaviour to fix.
 
 ### The Linux fs-watch branch: measured 2026-07-28, Fedora x86_64 host
 
@@ -919,6 +989,12 @@ This closes the "Linux" unknown above. `uv.os_uname().sysname` is `Linux`, so th
 | The button renders | `󰓛 Live :5500` seen in the rendered statusline under a 200-column PTY |
 | **`.git` is watched** | a servable file written *inside* `.git` fired a reload — the `subdir ~= ".git"` guard is dead code |
 | **Deleting a watched dir wedges it** | see the entry in "Things that will bite you"; `git gc` reproduces it |
+| **Recovery is a real rebind, not the old server** | across a `git gc` wedge: listeners on 5500 went 1 → **0** between stop and start, the old `Server`'s `.server` handle went `nil`, and the new one is a different table with a different `uv_tcp_t`. `Server:stop` closes the TCP handle *before* the line that throws, which is why this works |
+| **Two wedges in one session are both survivable** | `git gc`, recover, fresh commit, `git gc` again, recover — reload frames delivered after *each* recovery. The single-shot retry in `M.start()` is enough because each start begins from cleared state |
+| **The new watcher tree is live after recovery** | a directory created *after* the recovery, written into, fired a reload — the old tree could not have done that |
+| **The `LivePreview` augroup does not accumulate** | 1 entry on HTML / 2 on Markdown after every start, **absent** after every stop, identical after both recoveries. No double-fire |
+| **The `sync_scroll` autocmds DO accumulate** | see "Things that will bite you" — they are registered with no group, so nothing deletes them |
+| **The page actually follows the cursor** | headless Firefox over Marionette: `window.scrollY` 0 → **11569** on jumping to line 350 of a 1202-line Markdown file, → **0** again on jumping back to line 2 |
 
 `:checkhealth livepreview` reports **"No healthcheck found"** unless the plugin is loaded first —
 it is `cmd`-lazy, so a bare `nvim -c 'checkhealth livepreview'` proves nothing. Force it with
@@ -928,6 +1004,30 @@ Two cost notes: the watcher tree held **15 inotify watches** for a 14-directory 
 those directories being `.git` — real waste, but `max_user_watches` is 274132 here, so not a
 practical limit. And the `config.preview` workaround added no measurable startup cost: headless
 medians 25.4ms with it and 25.9ms without, inside sets spanning 24.4–28.4ms.
+
+### `sync_scroll` costs ~3.2µs per attached socket per cursor move — keep it `true`
+
+Measured 2026-07-28 on the Fedora box, interleaved A/B over 6 reps, 2000 synchronous
+`CursorMoved` dispatches per run, `vim.ui.open` stubbed so no real browser skews the client list:
+
+| connected clients | `sync_scroll = true` | `= false` | attributable cost |
+| --- | --- | --- | --- |
+| 0 | 121.6µs/move | 113.5µs | 8.1µs — **inside the noise** |
+| 1 | 125.7µs | 112.1µs | 13.6µs |
+| 5 | 137.9µs | 108.9µs | 29.0µs |
+| 20 | 184.7µs | 111.7µs | 73.0µs |
+
+So the cost is real but linear and small: ~8µs fixed plus ~3.2µs per entry in
+`connecting_clients`. The `false` arm is flat at ~111µs whatever the client count, which is what
+confirms the whole difference is the handler's per-client writes. Against a 16ms frame budget the
+worst measured case is 0.45%. **`sync_scroll = false` in `webpreview.lua` is not worth making** —
+it would remove a feature that demonstrably works to dodge a cost that does not resolve above
+noise with a single browser attached.
+
+The number that grows is not the handler, it is `connecting_clients` (see below). And the
+accumulated *handlers* are nearly free: 1/3/5 starts gave 134.7/138.4/143.3µs at 5 clients —
+~2µs each, not the ~16µs each they would cost if they multiplied. They early-return, because
+`send_scroll` sets `cursor_line` and copies 2..N find it already equal.
 
 ## Style of work expected here
 
