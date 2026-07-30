@@ -43,6 +43,7 @@ lua/config/
   tools.lua             Mason formatters/linters        <- also read by install.sh
   python.lua            venv auto-detection, :UvSync / :UvAdd / :UvRun / :RuffCheck
   preview.lua           live-preview state shared by the Live button and <leader>p
+  folder.lua            dashboard "Open folder": native dialog, :cd, session or explorer
 lua/plugins/            one file per concern; lazy.nvim specs
 ```
 
@@ -446,9 +447,79 @@ with a real filename, so dropbar's `enable` passed it and set
 `enable` is not enough to rely on — dropbar also attaches on `BufEnter` and `FileType`, so the
 race is not one to win by registration order. `ui.lua` excludes the filetype by name instead.
 
+**The dashboard's `preset.keys` replaces upstream's list wholesale, and this config's copy had
+lost every icon.** Seven of the eight entries carried `icon = " "` — one ASCII space, no glyph,
+measured as 10 bytes per field against 14 for the one real one (Lazy's `󰒲`, U+F04B2), and blank
+in the original commit. Upstream ships glyphs (`snacks/dashboard.lua:94-101`); they were dropped
+when the block was copied. Restored 2026-07-30 to U+F002, F15B, F022, F0C5, F423, E348, F426, and
+`Open folder` uses U+F024B, the same folder glyph as the tabline's Files button.
+
+Check icons by **codepoint**, never by eye: in a terminal without the Nerd Font a PUA glyph and a
+space look identical, which is how seven blanks survived. Read the rendered dashboard buffer back
+and assert every row is the same width — measured 130 for all nine after the fix.
+
+**A chooser table needs its desktop preference and its fallback order kept apart.**
+`config.folder`'s `DIALOGS` is scanned twice: first for an entry whose `desktop` matches
+`$XDG_CURRENT_DESKTOP`, then for any executable one at all. So the table's own order is only the
+*fallback* order, and the generic GTK zenity has to come first. Measured on the first run of that
+table with kdialog leading: `XDG_CURRENT_DESKTOP=GNOME` still selected `kdialog`.
+
+**persistence.nvim is not loaded on the dashboard, and requiring it is what loads it.** It is
+`event = "BufReadPre"`, so on a bare start screen `Config.options.dir` is empty and `current()`
+cannot resolve; a plain `require("persistence")` runs its `config` through lazy.nvim's require
+hook synchronously and fixes that. The require must come **after** the `:cd` — `current()` is
+built from `getcwd()` plus `git branch --show-current` run in the process's cwd
+(`persistence/init.lua:11-21`). Note the knock-on: a dashboard that has opened a folder *has*
+persistence loaded, so quitting now saves a session where a bare dashboard saved nothing.
+
+**An open snacks explorer re-roots itself on `:cd` — do not close and reopen it.**
+`picker.list.win:on("DirChanged", ...)` (`picker/source/explorer.lua:83-90`) calls
+`p:set_cwd(ev.file); p:find()`, and `Snacks.win:_on` (`win.lua:493-499`) only narrows the
+autocmd's pattern when the caller passes `pattern`/`buffer`/`win`/`buf` — that call passes none,
+so it is registered globally with `*`. Measured across two `config.folder.enter()` calls: one
+explorer throughout, root following the cwd. The only thing to guard is opening a *second* one,
+which the `Snacks.picker.get({ source = "explorer" })[1]` test in `ui.lua:287` already does.
+
+**Opening the explorer from the dashboard leaves a tabline above the splash.** `showtabline` goes
+0 → 2 because the `bufferline-dashboard` `BufEnter` autocmd (`ui.lua:308-315`) fires for the
+sidebar's buffer. Measured under a 200x50 pty, both from `<leader>e` and from the dashboard's
+`Open folder`, so it is pre-existing and not that feature's doing. The fix, if ever wanted, is
+not a filetype blacklist but keying that autocmd on "is any window still showing a
+`snacks_dashboard` buffer".
+
+**A pty driver that blocks in `os.read` never delivers a keypress on schedule.** An idle dashboard
+emits no output, so a `while: read()` loop sits inside the read past the send time and only writes
+the key when something else happens to redraw. Measured: `o` never took, `after cwd` was unchanged,
+and it looked exactly like an unbound key — while `maparg("o", ...).buffer` was `1` the whole time.
+Use `select([fd], [], [], 0.2)` around the read. `scratchpad/pty_run.py` in the session that wrote
+this does it.
+
+**Shadowing `vim.system` in a probe catches the git bar too.** `ui.lua`'s `gitbar_refresh` spawns
+`git rev-parse` and `git rev-list` on startup and on **`DirChanged`** — which is precisely what a
+`:cd` under test fires. A bare call counter measured **5** "dialog" spawns for one keypress, and
+fed a directory path back to git's callbacks as though it were `rev-parse` output. Filter on
+`cmd[1]` and hand everything else to the real `vim.system`, or the count is meaningless and the
+gitbar's cache is quietly poisoned.
+
+**To test a spawn that opens a GUI, put a fake binary first on `PATH`.** A two-line `sh` script
+echoing a path covers argv, PATH resolution, `text = true` decoding and the trailing-newline trim,
+with no dialog for a probe to fail to click. Vary it: prints a path, prints nothing and exits 1
+(cancel), exits 2 with stderr (real failure), prints a nonexistent path, prints one with a space.
+Shadowing `vim.system` instead is faster but proves none of those.
+
+And redirect `require("persistence.config").options.dir` into a temp tree **before** anything that
+can load a session, or the probe writes into `~/.local/state/nvim/sessions/`. Count that directory
+before and after every run.
+
 **Remote provider hosts are disabled** (`python3`, `perl`, `ruby`, `node`) in `options.lua`.
 vim-wakatime probes `has('python3')`, and Neovim answered by spawning an interpreter — ~160ms
 on the first Python buffer.
+
+**vim-wakatime does not send a project, so the cwd has nothing to do with attribution.** It passes
+no `--project` or `--alternate-project` (grepped `lua/wakatime/init.lua` and `plugin/wakatime.vim`
+— only `alternate_language`), so wakatime-cli derives the project by walking up from the *file's*
+own path. Changing the working directory neither helps nor breaks Hackatime; `config.folder` uses
+`:cd` for the grep, the file finder, the git bar and the session's `curdir`, not for this.
 
 **`~/.wakatime.cfg` is hand-maintained and must never be written to.** It carries the API key
 and the Hackatime `api_url`. `install.sh` creates one *only* when the file is absent and a key
@@ -1028,6 +1099,44 @@ The number that grows is not the handler, it is `connecting_clients` (see below)
 accumulated *handlers* are nearly free: 1/3/5 starts gave 134.7/138.4/143.3µs at 5 clients —
 ~2µs each, not the ~16µs each they would cost if they multiplied. They early-return, because
 `send_scroll` sets `cursor_line` and copies 2..N find it already equal.
+
+## Handoff: the dashboard's "Open folder"
+
+Added 2026-07-30. `lua/config/folder.lua` plus one entry in `snacks.lua`'s `preset.keys` (`o`).
+Asks the desktop for a directory, `:cd`s the whole editor into it, then restores that folder's
+persistence session if it has one and otherwise leaves the explorer sidebar on it. Measured on the
+Fedora x86_64 host, `XDG_CURRENT_DESKTOP=KDE`, X11.
+
+| Claim | How it was established |
+| --- | --- |
+| Nothing loads at startup | `package.loaded["config.folder"]` is `false` after a bare headless start; the module is required by the keypress |
+| The right chooser, the right argv | `vim.system` shadowed: KDE → `kdialog --title Open folder --getexistingdirectory /home/is`; `XDG_CURRENT_DESKTOP=GNOME` → the zenity argv; `DISPLAY=`/`WAYLAND_DISPLAY=` empty → **no spawn at all**, falls through to `vim.ui.input` with `completion = "dir"` |
+| The spawn itself | fake `kdialog` first on `PATH`, 5 variants: pick → `:cd`; a folder named `with space` → `:cd`; nonexistent → WARN; exit 1 → **silent**; exit 2 → ERROR carrying code and stderr |
+| Cancel changes nothing | cwd identical afterwards, no notification. Gated on **empty stdout**, not on the exit code |
+| The continuation, per branch | headless `M.enter()`: plain folder → cwd + explorer root both correct; `has space` → correct, and the *same* explorer re-rooted (1 throughout); folder with a session → its buffer loaded; a file, a missing path and a `chmod 000` folder → the right notification each, cwd held |
+| `:cd` is global | `vim.uv.cwd()` moves; `:cd` also clears any window-local dir (`:h :cd`), which is why it is the Ex command and not `vim.fn.chdir()` |
+| The row is legible and aligned | 200x50 pty, rendered dashboard buffer: all nine rows carry a glyph and every one is width 130 |
+| The key is wired | same pty: `maparg("o", "n", ...).buffer == 1`, `Open folder` present in the buffer, **exactly 1** chooser spawn per press |
+| Both branches, on screen | no-session → cwd moved, 1 explorer rooted there, dashboard still live; with-session → dashboard buffer **gone**, session's buffer loaded, **0** explorers. Two reps each, byte-identical |
+| No collateral | real session dir held at 25 files across every run; no stray `nvim` |
+| `install.sh` untouched | it reads only `config.parsers`/`servers`/`tools` (lines 926, 977, 981) — still 26/13/6 — mentions no dashboard, and its `nvim --headless -c 'qa'` check is silent. Headless never opens a dashboard, so the entry cannot run during an install |
+
+### Still unverified
+
+- **The dialog on screen.** Nothing has clicked one: that it appears on top, starts in `$HOME`, and
+  that Escape leaves the dashboard untouched, are the owner's checks (reported working 2026-07-30,
+  by use rather than by measurement). A probe must not try — a real chooser blocks until clicked.
+- **The real kdialog's handling of a folder with a space in its name.** The code path is measured
+  through a fake chooser; the Qt dialog's own quoting is not.
+- **zenity and yad in anger.** Only their argv is asserted, from the GNOME branch of the chooser
+  probe. Neither has been run on this box.
+- **A machine with no chooser at all.** The typed fallback is measured by shadowing, not on a real
+  bare tty. `install.sh` installs no dialog binary and deliberately so — the fallback is what
+  covers a headless or freshly-provisioned box, so do not add one to the installer without a
+  reason.
+- **The `%%branch`-suffixed session name**, since this repo is on `main`. Existence is tested with
+  the same two `current()` calls `load()` uses internally, so the two cannot disagree about which
+  file gets sourced — but the branch case has not been exercised.
 
 ## Style of work expected here
 
